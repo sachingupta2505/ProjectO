@@ -491,6 +491,7 @@ def get_live_crude_spot(force_refresh: bool = False) -> Dict[str, Any]:
     angel_close: Optional[float] = None
     angel_high: Optional[float] = None
     angel_low: Optional[float] = None
+    angel_open: Optional[float] = None
 
     try:
         import json as _json
@@ -502,7 +503,8 @@ def get_live_crude_spot(force_refresh: bool = False) -> Dict[str, Any]:
         for t in ("565900", "565899"):
             if t in _payload and isinstance(_payload[t], dict):
                 item = _payload[t]
-                if now_ts - item.get("ts", 0) < 15:
+                # Allow up to 60s of freshness from live WebSocket
+                if now_ts - item.get("ts", 0) < 60:
                     angel_ltp = float(item["ltp"])
                     if item.get("close"):
                         angel_close = float(item["close"])
@@ -510,9 +512,11 @@ def get_live_crude_spot(force_refresh: bool = False) -> Dict[str, Any]:
                         angel_high = float(item["high"])
                     if item.get("low"):
                         angel_low = float(item["low"])
+                    if item.get("open"):
+                        angel_open = float(item["open"])
                     break
         if angel_ltp is None and "ltp" in _payload:
-            if now_ts - _payload.get("ts", 0) < 15:
+            if now_ts - _payload.get("ts", 0) < 60:
                 angel_ltp = float(_payload["ltp"])
     except Exception:
         pass
@@ -525,11 +529,12 @@ def get_live_crude_spot(force_refresh: bool = False) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # If we have a fresh Angel WebSocket tick, return FAST PATH without blocking on Yahoo HTTP!
+    # If we have an Angel WebSocket tick, return FAST PATH with genuine MCX exchange prices!
     if angel_ltp and angel_ltp > 0:
         prev_close = angel_close if (angel_close and angel_close > 0) else (_CRUDE_CACHE.get("prev_close", 8643.0) if _CRUDE_CACHE else 8643.0)
         day_high = angel_high if (angel_high and angel_high > 0) else max(_CRUDE_CACHE.get("day_high", angel_ltp), angel_ltp) if _CRUDE_CACHE else angel_ltp
         day_low = angel_low if (angel_low and angel_low > 0) else min(_CRUDE_CACHE.get("day_low", angel_ltp), angel_ltp) if _CRUDE_CACHE else angel_ltp
+        open_price = angel_open if (angel_open and angel_open > 0) else (_CRUDE_CACHE.get("open", angel_ltp) if _CRUDE_CACHE else angel_ltp)
         change_pts = round(angel_ltp - prev_close, 2)
         change_pct = round((change_pts / prev_close) * 100.0, 2) if prev_close else 0.0
 
@@ -541,6 +546,7 @@ def get_live_crude_spot(force_refresh: bool = False) -> Dict[str, Any]:
             "prev_close": prev_close,
             "day_high": day_high,
             "day_low": day_low,
+            "open": open_price,
             "change": change_pts,
             "change_pct": change_pct,
             "lot_size": getattr(settings, "CRUDE_LOT_SIZE", 10),
@@ -553,96 +559,26 @@ def get_live_crude_spot(force_refresh: bool = False) -> Dict[str, Any]:
         _CRUDE_LAST_FETCH = now_ts
         return result
 
-    # ── STEP 2: SLOW FALLBACK: Only fetch Yahoo WTI if WebSocket is unavailable ──
-    session = _get_http_session()
-    wti_usd: Optional[float] = None
-    prev_close_usd: Optional[float] = None
-    day_high_usd: Optional[float] = None
-    day_low_usd: Optional[float] = None
+    # ── STEP 2: SLOW FALLBACK: If WebSocket temporarily absent, prioritize previous genuine MCX cache ──
+    if _CRUDE_CACHE and _CRUDE_CACHE.get("spot", 0) > 0:
+        return _CRUDE_CACHE
 
-    try:
-        r1 = session.get(
-            "https://query2.finance.yahoo.com/v8/finance/chart/CL=F?interval=1m&range=1d",
-            timeout=3.0,
-        )
-        if r1.status_code == 200:
-            meta_cl = r1.json()["chart"]["result"][0]["meta"]
-            wti_usd = float(meta_cl.get("regularMarketPrice", 0) or 0)
-            prev_close_usd = float(meta_cl.get("chartPreviousClose", wti_usd) or wti_usd)
-            day_high_usd = float(meta_cl.get("regularMarketDayHigh", wti_usd) or wti_usd)
-            day_low_usd = float(meta_cl.get("regularMarketDayLow", wti_usd) or wti_usd)
-    except Exception as e:
-        logger.warning(f"Yahoo WTI fetch failed: {e}")
-
-    # Fetch live USDINR
-    fx_rate = _get_live_usdinr()
-
-    if wti_usd and wti_usd > 0:
-        mcx_basis = (
-            _CALIBRATED_BASIS
-            if _CALIBRATED_BASIS is not None
-            else getattr(settings, "CRUDE_MCX_BASIS", 15.0)
-        )
-        inr_spot = round(wti_usd * fx_rate + mcx_basis, 2)
-        source = "Yahoo+LiveFX" + ("+CalibBasis" if _CALIBRATED_BASIS is not None else "+StaticBasis")
-    else:
-        # No fresh data — return stale cache
-        if _CRUDE_CACHE:
-            return _CRUDE_CACHE
-        return {
-            "symbol": "CRUDEOIL",
-            "spot": 8570.0,
-            "usd_price": 0.0,
-            "usdinr": fx_rate,
-            "prev_close": 8620.0,
-            "day_high": 8650.0,
-            "day_low": 8520.0,
-            "change": -50.0,
-            "change_pct": -0.58,
-            "lot_size": getattr(settings, "CRUDE_LOT_SIZE", 10),
-            "timestamp": datetime.now(),
-            "is_live": False,
-            "source": "Fallback",
-        }
-
-    # ── Compute INR OHLC from WTI when available ──────────────────────────────
-    mcx_basis_used = _CALIBRATED_BASIS if _CALIBRATED_BASIS is not None else getattr(settings, "CRUDE_MCX_BASIS", 15.0)
-    if wti_usd:
-        inr_prev = round((prev_close_usd or wti_usd) * fx_rate + mcx_basis_used, 2)
-        inr_high = round((day_high_usd or wti_usd) * fx_rate + mcx_basis_used, 2)
-        inr_low = round((day_low_usd or wti_usd) * fx_rate + mcx_basis_used, 2)
-    else:
-        inr_prev = inr_spot
-        inr_high = inr_spot
-        inr_low = inr_spot
-
-    # If Angel WS is the source, use it for the spot but keep Yahoo-derived OHLC
-    if angel_ltp:
-        inr_high = max(inr_high, inr_spot)
-        inr_low = min(inr_low, inr_spot)
-
-    change_pts = round(inr_spot - inr_prev, 2)
-    change_pct = round((change_pts / inr_prev) * 100.0, 2) if inr_prev else 0.0
-
-    result = {
+    return {
         "symbol": "CRUDEOIL",
-        "spot": inr_spot,
-        "usd_price": wti_usd or 0.0,
-        "usdinr": fx_rate,
-        "prev_close": inr_prev,
-        "day_high": inr_high,
-        "day_low": inr_low,
-        "change": change_pts,
-        "change_pct": change_pct,
+        "spot": 8560.0,
+        "usd_price": 0.0,
+        "usdinr": 94.5,
+        "prev_close": 8643.0,
+        "day_high": 8696.0,
+        "day_low": 8374.0,
+        "open": 8669.0,
+        "change": -83.0,
+        "change_pct": -0.96,
         "lot_size": getattr(settings, "CRUDE_LOT_SIZE", 10),
         "timestamp": datetime.now(),
-        "is_live": True,
-        "source": source,
-        "calibrated_basis": _CALIBRATED_BASIS,
+        "is_live": False,
+        "source": "Fallback",
     }
-    _CRUDE_CACHE = result
-    _CRUDE_LAST_FETCH = now_ts
-    return result
 
 
 def fetch_crude_candles(interval_minutes: int = 60, days_back: int = 30) -> pd.DataFrame:

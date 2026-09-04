@@ -28,9 +28,15 @@ NSE_CM_EXCHANGE = 1        # NSE Cash Market
 # Subscription mode
 LTP_MODE = 1               # Only Last Traded Price (lowest bandwidth)
 
-# MCX Crude Oil Mini Sept 2026 token
+# MCX Crude Oil Sept 2026 tokens
 CRUDE_MINI_TOKEN = "565900"
 CRUDE_MAIN_TOKEN = "565899"
+
+# NSE Index tokens
+NIFTY_TOKEN = "26000"
+NIFTY_ALT_TOKEN = "99926000"
+BANKNIFTY_TOKEN = "26009"
+BANKNIFTY_ALT_TOKEN = "99926009"
 
 # How stale an LTP is allowed to be before we consider it dead (seconds)
 MAX_LTP_AGE_SEC = 10
@@ -95,6 +101,22 @@ class AngelOneWebSocketFeed:
                 return ltp
         return None
 
+    def get_nifty_ltp(self) -> Optional[float]:
+        """Returns the latest NIFTY 50 index spot LTP from WebSocket."""
+        for token in (NIFTY_TOKEN, NIFTY_ALT_TOKEN):
+            ltp = self._get_ltp(token)
+            if ltp is not None:
+                return ltp
+        return None
+
+    def get_banknifty_ltp(self) -> Optional[float]:
+        """Returns the latest BANKNIFTY index spot LTP from WebSocket."""
+        for token in (BANKNIFTY_TOKEN, BANKNIFTY_ALT_TOKEN):
+            ltp = self._get_ltp(token)
+            if ltp is not None:
+                return ltp
+        return None
+
     def is_connected(self) -> bool:
         return self._connected
 
@@ -123,7 +145,6 @@ class AngelOneWebSocketFeed:
             ts = self._ltp_ts.get(token, 0.0)
             return round(time.time() - ts, 1) if ts else 9999.0
 
-    # Path to shared LTP file — readable by any process (Streamlit, monitors, etc.)
     _LTP_FILE = "logs/angel_ltp.json"
 
     def _set_ltp(self, token: str, price: float):
@@ -131,19 +152,15 @@ class AngelOneWebSocketFeed:
         with self._lock:
             self._ltp[token] = price
             self._ltp_ts[token] = now
+            current_copy = {t: {"ltp": p, "ts": self._ltp_ts.get(t, now)} for t, p in self._ltp.items()}
         # Also persist to file so other processes (Streamlit dashboard) can read it
         try:
             import json, os
             os.makedirs("logs", exist_ok=True)
-            payload = {
-                "token": token,
-                "ltp": price,
-                "ts": now,
-            }
             # Atomic write: write to temp then rename
             tmp = self._LTP_FILE + ".tmp"
             with open(tmp, "w") as f:
-                json.dump(payload, f)
+                json.dump(current_copy, f)
             os.replace(tmp, self._LTP_FILE)
         except Exception:
             pass  # Never let file I/O crash the feed thread
@@ -203,21 +220,25 @@ class AngelOneWebSocketFeed:
         self._sws = sws
 
         def on_open(wsapp):
-            logger.info("Angel WebSocket connected. Subscribing MCX Crude...")
+            logger.info("Angel WebSocket connected. Subscribing MCX Crude & NSE Indices...")
             self._connected = True
             self._retry_delay = 5  # reset back-off on successful connect
             token_list = [
                 {
                     "exchangeType": MCX_FO_EXCHANGE,
                     "tokens": [CRUDE_MINI_TOKEN, CRUDE_MAIN_TOKEN],
+                },
+                {
+                    "exchangeType": NSE_CM_EXCHANGE,
+                    "tokens": [NIFTY_TOKEN, NIFTY_ALT_TOKEN, BANKNIFTY_TOKEN, BANKNIFTY_ALT_TOKEN],
                 }
             ]
             sws.subscribe(
-                correlation_id="crude001",
+                correlation_id="multi_feed001",
                 mode=LTP_MODE,
                 token_list=token_list,
             )
-            logger.info(f"Subscribed MCX Crude tokens: {CRUDE_MINI_TOKEN}, {CRUDE_MAIN_TOKEN}")
+            logger.info("Subscribed MCX Crude & NSE Indices (NIFTY 50 & BANKNIFTY).")
 
         def on_data(wsapp, message):
             # message is already parsed by SmartWebSocketV2._parse_binary_data

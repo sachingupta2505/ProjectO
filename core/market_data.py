@@ -37,13 +37,63 @@ def _get_http_session() -> requests.Session:
 
 def get_live_nifty_spot(force_refresh: bool = False) -> Dict[str, Any]:
     """
-    Returns real-time NIFTY 50 spot price data with sub-100ms response time.
+    Returns real-time NIFTY 50 spot price data with sub-1ms response time when WebSocket is active.
     Cached for 1.5 seconds to balance responsiveness and bandwidth.
     """
     global _CACHE, _LAST_FETCH_TIME
     now_ts = time.time()
 
     if not force_refresh and _CACHE and (now_ts - _LAST_FETCH_TIME < _CACHE_TTL):
+        return _CACHE
+
+    # Attempt 0: Instant Angel One WebSocket feed (< 1ms, zero HTTP requests)
+    ws_nifty: Optional[float] = None
+    # (a) Read from shared multi-token file (works across processes)
+    try:
+        import json as _json
+        _ltp_file = "logs/angel_ltp.json"
+        with open(_ltp_file, "r") as _f:
+            _payload = _json.load(_f)
+        for t in ("26000", "99926000"):
+            if t in _payload and isinstance(_payload[t], dict):
+                item = _payload[t]
+                if now_ts - item.get("ts", 0) < 10:
+                    ws_nifty = float(item["ltp"])
+                    break
+    except Exception:
+        pass
+
+    # (b) In-process feed
+    if ws_nifty is None:
+        try:
+            from core.angel_feed import angel_feed
+            ws_nifty = angel_feed.get_nifty_ltp()
+        except Exception:
+            pass
+
+    if ws_nifty and ws_nifty > 0:
+        prev_close = _CACHE.get("prev_close", ws_nifty) if _CACHE else ws_nifty
+        day_high = max(_CACHE.get("high", ws_nifty), ws_nifty) if _CACHE else ws_nifty
+        day_low = min(_CACHE.get("low", ws_nifty), ws_nifty) if _CACHE else ws_nifty
+        change = round(ws_nifty - prev_close, 2)
+        pct_change = round((change / prev_close) * 100.0, 2) if prev_close else 0.0
+
+        _CACHE = {
+            "symbol": "NIFTY 50",
+            "spot": ws_nifty,
+            "change": change,
+            "pct_change": pct_change,
+            "high": day_high,
+            "low": day_low,
+            "open": _CACHE.get("open", ws_nifty) if _CACHE else ws_nifty,
+            "prev_close": prev_close,
+            "advances": "N/A",
+            "declines": "N/A",
+            "timestamp": datetime.now(),
+            "is_live": True,
+            "source": "AngelOne-WS"
+        }
+        _LAST_FETCH_TIME = now_ts
         return _CACHE
 
     # Attempt 1: Ultra-fast derivatives live quote feed (~60ms latency, zero cookie handshake)
@@ -146,7 +196,43 @@ def get_live_nifty_spot(force_refresh: bool = False) -> Dict[str, Any]:
 
 
 def get_live_banknifty_spot() -> Dict[str, Any]:
-    """Returns real-time BANKNIFTY spot price data."""
+    """Returns real-time BANKNIFTY spot price data with sub-1ms response time when WebSocket is active."""
+    # Attempt 0: Instant Angel One WebSocket feed (< 1ms, zero HTTP requests)
+    ws_bn: Optional[float] = None
+    try:
+        import json as _json
+        _ltp_file = "logs/angel_ltp.json"
+        with open(_ltp_file, "r") as _f:
+            _payload = _json.load(_f)
+        for t in ("26009", "99926009"):
+            if t in _payload and isinstance(_payload[t], dict):
+                item = _payload[t]
+                if time.time() - item.get("ts", 0) < 10:
+                    ws_bn = float(item["ltp"])
+                    break
+    except Exception:
+        pass
+
+    if ws_bn is None:
+        try:
+            from core.angel_feed import angel_feed
+            ws_bn = angel_feed.get_banknifty_ltp()
+        except Exception:
+            pass
+
+    if ws_bn and ws_bn > 0:
+        return {
+            "symbol": "BANKNIFTY",
+            "spot": ws_bn,
+            "change": 0.0,
+            "pct_change": 0.0,
+            "high": ws_bn,
+            "low": ws_bn,
+            "timestamp": datetime.now(),
+            "is_live": True,
+            "source": "AngelOne-WS"
+        }
+
     try:
         session = requests.Session()
         session.headers.update({
@@ -166,7 +252,8 @@ def get_live_banknifty_spot() -> Dict[str, Any]:
                         "high": float(item.get("high", 0.0)),
                         "low": float(item.get("low", 0.0)),
                         "timestamp": datetime.now(),
-                        "is_live": True
+                        "is_live": True,
+                        "source": "NSE"
                     }
     except Exception:
         pass
@@ -176,7 +263,8 @@ def get_live_banknifty_spot() -> Dict[str, Any]:
         "change": 0.0,
         "pct_change": 0.0,
         "timestamp": datetime.now(),
-        "is_live": False
+        "is_live": False,
+        "source": "Fallback"
     }
 
 
@@ -385,22 +473,78 @@ def get_live_crude_spot(force_refresh: bool = False) -> Dict[str, Any]:
     Returns real-time MCX Crude Oil price in INR per barrel.
 
     Priority:
-      1. Angel One WebSocket LTP  — actual MCX exchange price (most accurate)
-      2. Yahoo Finance 1m WTI + live USDINR + self-calibrated MCX basis
+      1. Angel One WebSocket LTP  — actual MCX exchange price (most accurate, < 1ms)
+      2. Yahoo Finance 1m WTI + live USDINR + self-calibrated MCX basis (fallback)
       3. Stale cache
       4. Hardcoded fallback
-
-    When source (1) is active, we also calibrate the MCX basis so that
-    source (2) remains accurate during brief WebSocket disconnects.
     """
     global _CRUDE_CACHE, _CRUDE_LAST_FETCH, _CALIBRATED_BASIS
     now_ts = time.time()
     if not force_refresh and _CRUDE_CACHE and (now_ts - _CRUDE_LAST_FETCH < _CRUDE_CACHE_TTL):
         return _CRUDE_CACHE
 
-    session = _get_http_session()
+    # ── STEP 1: FAST PATH: Try Angel One WebSocket / shared file FIRST (< 1ms) ───
+    source = "Yahoo+LiveFX"
+    angel_ltp: Optional[float] = None
 
-    # ── Fetch WTI price (1-minute resolution, most current) ──────────────────
+    # (a) Read from shared file first (cross-process safe across Streamlit and main)
+    try:
+        import json as _json
+        _ltp_file = "logs/angel_ltp.json"
+        with open(_ltp_file, "r") as _f:
+            _payload = _json.load(_f)
+        
+        # Check dictionary format: { "token": {"ltp": ..., "ts": ...} } or legacy {"token": ..., "ltp": ..., "ts": ...}
+        for t in ("565900", "565899"):
+            if t in _payload and isinstance(_payload[t], dict):
+                item = _payload[t]
+                if now_ts - item.get("ts", 0) < 10:
+                    angel_ltp = float(item["ltp"])
+                    break
+        if angel_ltp is None and "ltp" in _payload:
+            if now_ts - _payload.get("ts", 0) < 10:
+                angel_ltp = float(_payload["ltp"])
+    except Exception:
+        pass
+
+    # (b) In-process WebSocket (if this process started the feed — e.g. main.py)
+    if angel_ltp is None:
+        try:
+            from core.angel_feed import angel_feed
+            angel_ltp = angel_feed.get_crude_ltp()
+        except Exception:
+            pass
+
+    # If we have a fresh Angel WebSocket tick, return FAST PATH without blocking on Yahoo HTTP!
+    if angel_ltp and angel_ltp > 0:
+        prev_close = _CRUDE_CACHE.get("prev_close", angel_ltp) if _CRUDE_CACHE else angel_ltp
+        day_high = max(_CRUDE_CACHE.get("day_high", angel_ltp), angel_ltp) if _CRUDE_CACHE else angel_ltp
+        day_low = min(_CRUDE_CACHE.get("day_low", angel_ltp), angel_ltp) if _CRUDE_CACHE else angel_ltp
+        change_pts = round(angel_ltp - prev_close, 2)
+        change_pct = round((change_pts / prev_close) * 100.0, 2) if prev_close else 0.0
+
+        result = {
+            "symbol": "CRUDEOIL",
+            "spot": angel_ltp,
+            "usd_price": _CRUDE_CACHE.get("usd_price", 0.0) if _CRUDE_CACHE else 0.0,
+            "usdinr": _FX_CACHE.get("inr", 94.5),
+            "prev_close": prev_close,
+            "day_high": day_high,
+            "day_low": day_low,
+            "change": change_pts,
+            "change_pct": change_pct,
+            "lot_size": getattr(settings, "CRUDE_LOT_SIZE", 10),
+            "timestamp": datetime.now(),
+            "is_live": True,
+            "source": "AngelOne-WS",
+            "calibrated_basis": _CALIBRATED_BASIS,
+        }
+        _CRUDE_CACHE = result
+        _CRUDE_LAST_FETCH = now_ts
+        return result
+
+    # ── STEP 2: SLOW FALLBACK: Only fetch Yahoo WTI if WebSocket is unavailable ──
+    session = _get_http_session()
     wti_usd: Optional[float] = None
     prev_close_usd: Optional[float] = None
     day_high_usd: Optional[float] = None
@@ -409,7 +553,7 @@ def get_live_crude_spot(force_refresh: bool = False) -> Dict[str, Any]:
     try:
         r1 = session.get(
             "https://query2.finance.yahoo.com/v8/finance/chart/CL=F?interval=1m&range=1d",
-            timeout=5.0,
+            timeout=3.0,
         )
         if r1.status_code == 200:
             meta_cl = r1.json()["chart"]["result"][0]["meta"]
@@ -420,49 +564,10 @@ def get_live_crude_spot(force_refresh: bool = False) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Yahoo WTI fetch failed: {e}")
 
-    # ── Fetch live USDINR ─────────────────────────────────────────────────────
+    # Fetch live USDINR
     fx_rate = _get_live_usdinr()
 
-    # ── Try Angel One WebSocket for actual MCX LTP ───────────────────────────
-    # Check BOTH sources:
-    #  (a) shared file written by main.py's WS thread — works across processes (Streamlit etc.)
-    #  (b) in-process angel_feed singleton — only works if THIS process started the feed
-    source = "Yahoo+LiveFX"
-    angel_ltp: Optional[float] = None
-
-    # (a) Read from shared file first (cross-process safe)
-    try:
-        import json as _json
-        _ltp_file = "logs/angel_ltp.json"
-        with open(_ltp_file, "r") as _f:
-            _payload = _json.load(_f)
-        _age = now_ts - _payload.get("ts", 0)
-        if _age < 10:  # Fresh within 10 seconds
-            angel_ltp = float(_payload["ltp"])
-    except Exception:
-        pass
-
-    # (b) In-process WebSocket (if this process started the feed — e.g. main.py itself)
-    if angel_ltp is None:
-        try:
-            from core.angel_feed import angel_feed
-            angel_ltp = angel_feed.get_crude_ltp()
-        except Exception:
-            pass
-
-    if angel_ltp and angel_ltp > 0:
-        # BEST CASE: actual MCX exchange price
-        inr_spot = angel_ltp
-        source = "AngelOne-WS"
-
-        # Self-calibrate basis for fallback periods
-        if wti_usd and wti_usd > 0:
-            computed_basis = round(angel_ltp - wti_usd * fx_rate, 2)
-            _CALIBRATED_BASIS = computed_basis
-            logger.debug(f"MCX basis calibrated: {computed_basis:.2f} (was: {_CALIBRATED_BASIS})")
-
-    elif wti_usd and wti_usd > 0:
-        # FALLBACK: derive MCX price from WTI + FX + best available basis
+    if wti_usd and wti_usd > 0:
         mcx_basis = (
             _CALIBRATED_BASIS
             if _CALIBRATED_BASIS is not None

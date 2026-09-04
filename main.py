@@ -60,6 +60,13 @@ class TradingBotRunner:
         self._last_bar_time = 0.0
         self._prev_nifty_spot: Optional[float] = None
         self._prev_crude_spot: Optional[float] = None
+        # True candle aggregation state (1-minute bars with genuine high/low tracking)
+        self._nifty_bar_open: Optional[float] = None
+        self._nifty_bar_high: float = -1e9
+        self._nifty_bar_low: float = 1e9
+        self._crude_bar_open: Optional[float] = None
+        self._crude_bar_high: float = -1e9
+        self._crude_bar_low: float = 1e9
 
         # Initialize Telegram Bridge for mobile phone interaction
         self.telegram = TelegramBridge(
@@ -76,7 +83,11 @@ class TradingBotRunner:
 
         # Initialize Broker
         if self.is_paper or self.broker_type == "paper":
-            self.broker = PaperBroker(initial_capital=settings.PAPER_INITIAL_CAPITAL, persist=True)
+            self.broker = PaperBroker(
+                initial_capital=settings.PAPER_INITIAL_CAPITAL,
+                slippage_pct=settings.SLIPPAGE_PCT,
+                persist=True
+            )
         elif self.broker_type == "zerodha":
             self.broker = ZerodhaBroker()
         elif self.broker_type == "angel":
@@ -237,19 +248,30 @@ class TradingBotRunner:
                     self.broker.set_ltp(inst.symbol, crude_spot)
                     self.strategy.on_tick(Tick(token=294, symbol=inst.symbol, ltp=crude_spot, timestamp=now))
 
-            # 3. Feed candle bars periodically (every 5 seconds)
-            if now_ts - self._last_bar_time >= 5.0:
+            # 3. Accumulate real price action and feed 1-minute candle bars periodically
+            if self._nifty_bar_open is None:
+                self._nifty_bar_open = nifty_spot
+            self._nifty_bar_high = max(self._nifty_bar_high, nifty_spot)
+            self._nifty_bar_low = min(self._nifty_bar_low, nifty_spot)
+
+            if self._crude_bar_open is None:
+                self._crude_bar_open = crude_spot
+            self._crude_bar_high = max(self._crude_bar_high, crude_spot)
+            self._crude_bar_low = min(self._crude_bar_low, crude_spot)
+
+            # Emit bar every 60 seconds (or after at least 30 seconds for initial bootstrap)
+            bar_interval = 60.0
+            if (now_ts - self._last_bar_time >= bar_interval) or (self._last_bar_time == 0.0 and now_ts > 0):
                 self._last_bar_time = now_ts
                 nifty_vol = float(nifty_info.get("volume", 20000)) if nifty_info else 20000
                 crude_vol = float(crude_info.get("volume", 5000)) if crude_info else 5000
 
                 # Deliver Nifty Bar
                 if not self.risk_manager.check_time_for_square_off(now, symbol="NIFTY"):
-                    prev_n = self._prev_nifty_spot if self._prev_nifty_spot is not None else nifty_spot
-                    n_open = prev_n
+                    n_open = self._nifty_bar_open or nifty_spot
                     n_close = nifty_spot
-                    n_high = max(n_open, n_close) + 1.5
-                    n_low = min(n_open, n_close) - 1.5
+                    n_high = max(self._nifty_bar_high, n_open, n_close)
+                    n_low = min(self._nifty_bar_low, n_open, n_close)
                     self.strategy.on_bar({
                         "symbol": "NIFTY",
                         "open": n_open,
@@ -258,15 +280,17 @@ class TradingBotRunner:
                         "close": n_close,
                         "volume": nifty_vol
                     })
-                    self._prev_nifty_spot = nifty_spot
+                    # Reset Nifty accumulator
+                    self._nifty_bar_open = nifty_spot
+                    self._nifty_bar_high = nifty_spot
+                    self._nifty_bar_low = nifty_spot
 
                 # Deliver Crude Oil Bar
                 if not self.risk_manager.check_time_for_square_off(now, symbol="CRUDEOIL"):
-                    prev_c = self._prev_crude_spot if self._prev_crude_spot is not None else crude_spot
-                    c_open = prev_c
+                    c_open = self._crude_bar_open or crude_spot
                     c_close = crude_spot
-                    c_high = max(c_open, c_close) + 2.0
-                    c_low = min(c_open, c_close) - 2.0
+                    c_high = max(self._crude_bar_high, c_open, c_close)
+                    c_low = min(self._crude_bar_low, c_open, c_close)
                     self.strategy.on_bar({
                         "symbol": "CRUDEOIL",
                         "open": c_open,
@@ -275,7 +299,10 @@ class TradingBotRunner:
                         "close": c_close,
                         "volume": crude_vol
                     })
-                    self._prev_crude_spot = crude_spot
+                    # Reset Crude accumulator
+                    self._crude_bar_open = crude_spot
+                    self._crude_bar_high = crude_spot
+                    self._crude_bar_low = crude_spot
 
         # 4. Check Strategy Exits & Multi-Session Square-Off
         self.strategy.check_exit_conditions(now)

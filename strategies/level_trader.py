@@ -372,7 +372,7 @@ class LevelTraderStrategy(BaseStrategy):
                 be_threshold_reached = (
                     (pnl_pct >= (trade.get("breakeven_pct", 0.02) * 100.0))
                     if asset_key == "NIFTY"
-                    else ((current_price - entry_price) >= trade.get("breakeven_pts", 20.0))
+                    else ((current_price - entry_price) >= trade.get("breakeven_pts", 30.0))
                 )
                 if be_threshold_reached and not trade.get("breakeven_locked", False):
                     be_sl = round(entry_price + 0.80, 2) if asset_key == "NIFTY" else round(entry_price + 3.5, 2)
@@ -395,7 +395,7 @@ class LevelTraderStrategy(BaseStrategy):
                 trail_threshold_reached = (
                     (peak_price >= entry_price * 1.025)
                     if asset_key == "NIFTY"
-                    else ((peak_price - entry_price) >= 25.0)
+                    else ((peak_price - entry_price) >= max(trade.get("breakeven_pts", 20.0) + 5.0, 25.0))
                 )
                 if trail_threshold_reached:
                     trail_dist = (
@@ -436,7 +436,7 @@ class LevelTraderStrategy(BaseStrategy):
                 be_threshold_reached = (
                     (pnl_pct >= (trade.get("breakeven_pct", 0.02) * 100.0))
                     if asset_key == "NIFTY"
-                    else ((entry_price - current_price) >= trade.get("breakeven_pts", 20.0))
+                    else ((entry_price - current_price) >= trade.get("breakeven_pts", 30.0))
                 )
                 if be_threshold_reached and not trade.get("breakeven_locked", False):
                     be_sl = round(entry_price - 0.80, 2) if asset_key == "NIFTY" else round(entry_price - 3.5, 2)
@@ -459,13 +459,13 @@ class LevelTraderStrategy(BaseStrategy):
                 trail_threshold_reached = (
                     (peak_price <= entry_price * 0.975)
                     if asset_key == "NIFTY"
-                    else ((entry_price - peak_price) >= 25.0)
+                    else ((entry_price - peak_price) >= 35.0)
                 )
                 if trail_threshold_reached:
                     trail_dist = (
                         round(entry_price * trade.get("trail_sl_pct", 0.015), 2)
                         if asset_key == "NIFTY"
-                        else trade.get("trail_sl_pts", 15.0)
+                        else trade.get("trail_sl_pts", 20.0)
                     )
                     cand_sl = round(peak_price + trail_dist, 2)
                     if cand_sl < trade["sl_price"]:
@@ -674,8 +674,8 @@ class LevelTraderStrategy(BaseStrategy):
             is_bullish = (option_type == OptionType.CE)
             order_side = OrderSide.BUY if is_bullish else OrderSide.SELL
 
-            pts_target = level.target_spot_pts or 65.0
-            pts_sl = level.sl_spot_pts or 30.0
+            pts_target = level.target_spot_pts if level.target_spot_pts is not None else 70.0
+            pts_sl = level.sl_spot_pts if level.sl_spot_pts is not None else 35.0
 
             if is_bullish:
                 target_price = round(entry_price + pts_target, 2)

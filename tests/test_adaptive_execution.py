@@ -50,8 +50,7 @@ def test_calculate_pivot_levels_math():
 
 def test_adaptive_regime_blacklisting(tmp_path):
     """Verify that toxic time regimes with low win rate and negative PnL get blacklisted."""
-    ledger = TradeLearningLedger()
-    ledger.storage_path = tmp_path / "test_ledger.json"
+    ledger = TradeLearningLedger(ledger_path=tmp_path / "test_ledger.json")
 
     # Log 3 losing trades during Midday Lull
     for i in range(3):
@@ -91,8 +90,7 @@ def test_adaptive_regime_blacklisting(tmp_path):
 
 def test_dynamic_volume_multiplier_elevation(tmp_path):
     """Verify that choppy levels elevate volume confirmation threshold to 1.5x."""
-    ledger = TradeLearningLedger()
-    ledger.storage_path = tmp_path / "test_ledger.json"
+    ledger = TradeLearningLedger(ledger_path=tmp_path / "test_ledger.json")
 
     # Log 2 losing trades on specific level
     for i in range(2):
@@ -149,7 +147,7 @@ def test_strategy_polarity_flipping():
         risk_manager=rms,
         levels=[test_level],
         lots=1,
-        enable_adaptive_learning=True
+        enable_adaptive_learning=False
     )
 
     # Prime volume history

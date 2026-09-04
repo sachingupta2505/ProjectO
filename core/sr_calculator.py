@@ -27,8 +27,8 @@ def calculate_pivot_levels(
     """
     sym = symbol.upper()
     is_nifty = "NIFTY" in sym
-    target_spot = 40.0 if is_nifty else 40.0
-    sl_spot = 20.0 if is_nifty else 20.0
+    target_spot = 40.0 if is_nifty else 70.0
+    sl_spot = 20.0 if is_nifty else 35.0
 
     # 1. Central Pivot Range (CPR)
     pivot = (high + low + close) / 3.0

@@ -41,7 +41,8 @@ def strategy():
         broker=broker,
         risk_manager=rms,
         levels=test_levels,
-        lots=1
+        lots=1,
+        enable_adaptive_learning=False
     )
     strat.initialize()
     strat.telegram.send_notification = lambda msg: None
@@ -125,7 +126,13 @@ def test_crude_oil_breakout_trade():
         )
     ]
 
-    strat = LevelTraderStrategy(broker=broker, risk_manager=rms, levels=crude_levels, lots=1)
+    strat = LevelTraderStrategy(
+        broker=broker,
+        risk_manager=rms,
+        levels=crude_levels,
+        lots=1,
+        enable_adaptive_learning=False
+    )
     strat.initialize()
     strat.telegram.send_notification = lambda msg: None
 
@@ -170,7 +177,13 @@ def test_crude_oil_breakeven_and_trailing():
         )
     ]
 
-    strat = LevelTraderStrategy(broker=broker, risk_manager=rms, levels=crude_levels, lots=1)
+    strat = LevelTraderStrategy(
+        broker=broker,
+        risk_manager=rms,
+        levels=crude_levels,
+        lots=1,
+        enable_adaptive_learning=False
+    )
     strat.initialize()
     strat.telegram.send_notification = lambda msg: None
 

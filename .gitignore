@@ -1,0 +1,33 @@
+﻿# Environment and Secrets
+.env
+.env.*
+!.env.example
+key.txt
+*.key
+*.pem
+
+# Data & Scrip masters (large files / local caches)
+data/scrip_master.json
+data/*.json
+oc.json
+
+# Logs & dynamic state
+logs/
+*.log
+
+# Python cache & virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+venv/
+.venv/
+env/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

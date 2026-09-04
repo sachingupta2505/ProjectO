@@ -26,41 +26,49 @@ _SERVER_INSTANCE: Optional[HTTPServer] = None
 _SERVER_LOCK = threading.Lock()
 
 
+_TICKER_CACHE = {}
+_TICKER_CACHE_TIME = 0.0
+
 class TickerHTTPHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        global _TICKER_CACHE, _TICKER_CACHE_TIME
         if self.path.startswith("/api/ticker"):
             try:
-                n = get_live_nifty_spot()
-                b = get_live_banknifty_spot()
-                c = get_live_crude_spot()
-                spot = float(n.get("spot", 23950.0))
-                atm = int(round(spot / 50.0) * 50)
+                now = time.time()
+                if not _TICKER_CACHE or (now - _TICKER_CACHE_TIME > 1.5):
+                    n = get_live_nifty_spot()
+                    b = get_live_banknifty_spot()
+                    c = get_live_crude_spot()
+                    spot = float(n.get("spot", 23950.0))
+                    atm = int(round(spot / 50.0) * 50)
 
-                # Fetch ATM PE & CE quotes
-                pe_q = get_live_option_quote("nifty", atm, "PE")
-                ce_q = get_live_option_quote("nifty", atm, "CE")
+                    # Fetch ATM PE & CE quotes
+                    pe_q = get_live_option_quote("nifty", atm, "PE")
+                    ce_q = get_live_option_quote("nifty", atm, "CE")
 
-                payload = {
-                    "nifty": spot,
-                    "n_chg": float(n.get("change", 0.0)),
-                    "n_pct": float(n.get("pct_change", 0.0)),
-                    "n_high": float(n.get("high", 0.0)),
-                    "n_low": float(n.get("low", 0.0)),
-                    "n_open": float(n.get("open", 0.0)),
-                    "atm": atm,
-                    "bank": float(b.get("spot", 0.0)),
-                    "b_chg": float(b.get("change", 0.0)),
-                    "b_pct": float(b.get("pct_change", 0.0)),
-                    "crude": float(c.get("spot", 8570.0)),
-                    "c_chg": float(c.get("change", 0.0)),
-                    "c_pct": float(c.get("change_pct", 0.0)),
-                    "ce_ltp": float(ce_q.get("ltp", 0.0)),
-                    "pe_ltp": float(pe_q.get("ltp", 0.0)),
-                    "expiry": pe_q.get("expiry", "2026-09-08"),
-                    "lot_size": settings.NIFTY_LOT_SIZE,
-                    "ts": time.strftime("%H:%M:%S")
-                }
-                body = json.dumps(payload).encode("utf-8")
+                    _TICKER_CACHE = {
+                        "nifty": spot,
+                        "n_chg": float(n.get("change", 0.0)),
+                        "n_pct": float(n.get("pct_change", 0.0)),
+                        "n_high": float(n.get("high", 0.0)),
+                        "n_low": float(n.get("low", 0.0)),
+                        "n_open": float(n.get("open", 0.0)),
+                        "atm": atm,
+                        "bank": float(b.get("spot", 0.0)),
+                        "b_chg": float(b.get("change", 0.0)),
+                        "b_pct": float(b.get("pct_change", 0.0)),
+                        "crude": float(c.get("spot", 8570.0)),
+                        "c_chg": float(c.get("change", 0.0)),
+                        "c_pct": float(c.get("change_pct", 0.0)),
+                        "ce_ltp": float(ce_q.get("ltp", 0.0)),
+                        "pe_ltp": float(pe_q.get("ltp", 0.0)),
+                        "expiry": pe_q.get("expiry", "2026-09-08"),
+                        "lot_size": settings.NIFTY_LOT_SIZE,
+                        "ts": time.strftime("%H:%M:%S")
+                    }
+                    _TICKER_CACHE_TIME = now
+
+                body = json.dumps(_TICKER_CACHE).encode("utf-8")
 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")

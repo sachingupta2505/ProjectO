@@ -147,12 +147,23 @@ class AngelOneWebSocketFeed:
 
     _LTP_FILE = "logs/angel_ltp.json"
 
-    def _set_ltp(self, token: str, price: float):
+    def _set_quote(self, token: str, price: float, close: float = 0.0, high: float = 0.0, low: float = 0.0, open_p: float = 0.0):
         now = time.time()
         with self._lock:
             self._ltp[token] = price
             self._ltp_ts[token] = now
-            current_copy = {t: {"ltp": p, "ts": self._ltp_ts.get(t, now)} for t, p in self._ltp.items()}
+            if not hasattr(self, "_quotes"):
+                self._quotes = {}
+            self._quotes[token] = {
+                "ltp": price,
+                "close": close if close > 0 else self._quotes.get(token, {}).get("close", price),
+                "high": high if high > 0 else max(self._quotes.get(token, {}).get("high", price), price),
+                "low": low if low > 0 else min(self._quotes.get(token, {}).get("low", price), price),
+                "open": open_p if open_p > 0 else self._quotes.get(token, {}).get("open", price),
+                "ts": now,
+            }
+            current_copy = dict(self._quotes)
+
         # Also persist to file so other processes (Streamlit dashboard) can read it
         try:
             import json, os
@@ -233,23 +244,28 @@ class AngelOneWebSocketFeed:
                     "tokens": [NIFTY_TOKEN, NIFTY_ALT_TOKEN, BANKNIFTY_TOKEN, BANKNIFTY_ALT_TOKEN],
                 }
             ]
+            QUOTE_MODE = 2
             sws.subscribe(
                 correlation_id="multi_feed001",
-                mode=LTP_MODE,
+                mode=QUOTE_MODE,
                 token_list=token_list,
             )
-            logger.info("Subscribed MCX Crude & NSE Indices (NIFTY 50 & BANKNIFTY).")
+            logger.info("Subscribed MCX Crude & NSE Indices in QUOTE mode.")
 
         def on_data(wsapp, message):
             # message is already parsed by SmartWebSocketV2._parse_binary_data
             try:
                 token = str(message.get("token", ""))
                 ltp = message.get("last_traded_price", 0)
-                # Angel One sends LTP in paise (1/100 of rupee)
+                # Angel One sends prices in paise (1/100 of rupee)
                 if ltp and ltp > 0:
                     price_inr = ltp / 100.0
-                    self._set_ltp(token, price_inr)
-                    logger.debug(f"MCX LTP tick: token={token}, ltp={price_inr:.2f}")
+                    close_p = (message.get("closed_price", 0) or 0) / 100.0
+                    high_p = (message.get("high_price_of_the_day", 0) or 0) / 100.0
+                    low_p = (message.get("low_price_of_the_day", 0) or 0) / 100.0
+                    open_p = (message.get("open_price_of_the_day", 0) or 0) / 100.0
+                    self._set_quote(token, price_inr, close_p, high_p, low_p, open_p)
+                    logger.debug(f"MCX Quote tick: token={token}, ltp={price_inr:.2f}, close={close_p:.2f}")
             except Exception as e:
                 logger.warning(f"AngelFeed on_data parse error: {e} | raw={message}")
 

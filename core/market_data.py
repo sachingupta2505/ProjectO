@@ -488,21 +488,31 @@ def get_live_crude_spot(force_refresh: bool = False) -> Dict[str, Any]:
     angel_ltp: Optional[float] = None
 
     # (a) Read from shared file first (cross-process safe across Streamlit and main)
+    angel_close: Optional[float] = None
+    angel_high: Optional[float] = None
+    angel_low: Optional[float] = None
+
     try:
         import json as _json
         _ltp_file = "logs/angel_ltp.json"
         with open(_ltp_file, "r") as _f:
             _payload = _json.load(_f)
         
-        # Check dictionary format: { "token": {"ltp": ..., "ts": ...} } or legacy {"token": ..., "ltp": ..., "ts": ...}
+        # Check dictionary format: { "token": {"ltp": ..., "close": ..., "high": ..., "low": ..., "ts": ...} }
         for t in ("565900", "565899"):
             if t in _payload and isinstance(_payload[t], dict):
                 item = _payload[t]
-                if now_ts - item.get("ts", 0) < 10:
+                if now_ts - item.get("ts", 0) < 15:
                     angel_ltp = float(item["ltp"])
+                    if item.get("close"):
+                        angel_close = float(item["close"])
+                    if item.get("high"):
+                        angel_high = float(item["high"])
+                    if item.get("low"):
+                        angel_low = float(item["low"])
                     break
         if angel_ltp is None and "ltp" in _payload:
-            if now_ts - _payload.get("ts", 0) < 10:
+            if now_ts - _payload.get("ts", 0) < 15:
                 angel_ltp = float(_payload["ltp"])
     except Exception:
         pass
@@ -517,9 +527,9 @@ def get_live_crude_spot(force_refresh: bool = False) -> Dict[str, Any]:
 
     # If we have a fresh Angel WebSocket tick, return FAST PATH without blocking on Yahoo HTTP!
     if angel_ltp and angel_ltp > 0:
-        prev_close = _CRUDE_CACHE.get("prev_close", angel_ltp) if _CRUDE_CACHE else angel_ltp
-        day_high = max(_CRUDE_CACHE.get("day_high", angel_ltp), angel_ltp) if _CRUDE_CACHE else angel_ltp
-        day_low = min(_CRUDE_CACHE.get("day_low", angel_ltp), angel_ltp) if _CRUDE_CACHE else angel_ltp
+        prev_close = angel_close if (angel_close and angel_close > 0) else (_CRUDE_CACHE.get("prev_close", 8643.0) if _CRUDE_CACHE else 8643.0)
+        day_high = angel_high if (angel_high and angel_high > 0) else max(_CRUDE_CACHE.get("day_high", angel_ltp), angel_ltp) if _CRUDE_CACHE else angel_ltp
+        day_low = angel_low if (angel_low and angel_low > 0) else min(_CRUDE_CACHE.get("day_low", angel_ltp), angel_ltp) if _CRUDE_CACHE else angel_ltp
         change_pts = round(angel_ltp - prev_close, 2)
         change_pct = round((change_pts / prev_close) * 100.0, 2) if prev_close else 0.0
 

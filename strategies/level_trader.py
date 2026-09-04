@@ -667,7 +667,7 @@ class LevelTraderStrategy(BaseStrategy):
             spot = crude_data.get("spot", 8570.0)
             entry_price = spot
             lot_sz = getattr(settings, "CRUDE_LOT_SIZE", 10)
-            crude_lots = getattr(settings, "DEFAULT_CRUDE_LOTS", 4)
+            crude_lots = getattr(self, "crude_lots", None) or getattr(settings, "DEFAULT_CRUDE_LOTS", 1)
             quantity = crude_lots * lot_sz
 
             # For Crude, trade directional Futures / CFDs or ATM

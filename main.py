@@ -133,6 +133,14 @@ class TradingBotRunner:
                 logger.info(f"Closed {len(exit_orders)} positions during emergency shutdown.")
         except Exception as e:
             logger.error(f"Error during square-off: {e}")
+
+        # Run EOD Review and learning analysis on shutdown
+        try:
+            from scripts.eod_review import run_eod_review
+            run_eod_review(send_telegram=True)
+        except Exception as e:
+            logger.debug(f"EOD review on shutdown error: {e}")
+
         logger.info("👋 Trading Bot safely stopped.")
         sys.exit(0)
 
@@ -318,16 +326,21 @@ class TradingBotRunner:
             if isinstance(self.strategy, LevelTraderStrategy):
                 self.strategy.active_trades.clear()
 
-            is_profit = total_pnl >= 0
+            is_profit = day_pnl >= 0
             alert_header = "🎉 <b>DAILY PROFIT TARGET ACHIEVED!</b>" if is_profit else "🛑 <b>DAILY STOP-LOSS LIMIT HIT!</b>"
             self.telegram.send_notification(
                 f"{alert_header}\n\n"
-                f"• <b>Net Realized P&L:</b> <b>₹{total_pnl:+,.2f}</b>\n"
+                f"• <b>Net Realized P&L:</b> <b>₹{day_pnl:+,.2f}</b>\n"
                 f"• <b>Reason:</b> {reason}\n"
                 f"• <b>Action:</b> All open positions squared off immediately.\n"
                 f"• <b>Status:</b> Bot halted for today to lock in results."
             )
             logger.critical(f"🛑 BOT HALTED FOR THE DAY: {reason}")
+            try:
+                from scripts.eod_review import run_eod_review
+                run_eod_review(send_telegram=True)
+            except Exception as e:
+                logger.debug(f"EOD review on RMS halt error: {e}")
 
         return nifty_spot
 

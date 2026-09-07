@@ -28,6 +28,7 @@ from telegram_bridge.bot import TelegramBridge
 from core.charges import calculate_round_trip_charges
 from core.trade_analytics import TradeTelemetry, TradeLearningLedger, TradeAutopsy, classify_time_bucket
 from core.market_structure import MarketStructureEngine, StructureRegime
+from core.indicators import TechnicalConfluenceEngine
 
 logger = get_logger("LevelTrader")
 
@@ -74,6 +75,7 @@ class LevelTraderStrategy(BaseStrategy):
         self.last_trade_time_map: Dict[str, float] = {"NIFTY": 0.0, "CRUDEOIL": 0.0}
         self.level_cooldown_map: Dict[str, float] = {}
         self.market_structure = MarketStructureEngine(ema_period=20)
+        self.indicators = TechnicalConfluenceEngine()
 
         # Backwards compatibility state holders
         self._last_nifty_trade: Dict[str, Any] = {}
@@ -474,8 +476,9 @@ class LevelTraderStrategy(BaseStrategy):
             self.volume_histories[asset_key].append(vol)
         self.bar_histories[asset_key].append(bar)
 
-        # Update Market Structure engine with latest completed candle
+        # Update Market Structure & Technical Indicators engines with latest completed candle
         self.market_structure.update_bar(bar)
+        self.indicators.update_bar(bar)
 
         history = self.bar_histories[asset_key]
         if len(history) < 2:
@@ -545,6 +548,12 @@ class LevelTraderStrategy(BaseStrategy):
                         logger.info(f"🏛️ [STRUCTURE GUARD] Breakout blocked on {lvl.name}: {s_reason}")
                         continue
 
+                    # Technical Indicator Confluence Check (RSI, MACD, VWAP)
+                    c_ok, c_score, c_reason, _ = self.indicators.evaluate_confluence("BULLISH", "BREAKOUT", curr_close, asset_key)
+                    if not c_ok:
+                        logger.info(f"📊 [INDICATOR FILTER] Breakout blocked on {lvl.name}: {c_reason}")
+                        continue
+
                     vol_threshold = avg_volume * eff_vol_mult
                     if vol >= vol_threshold or avg_volume <= 0:
                         body = curr_close - curr_open
@@ -568,6 +577,12 @@ class LevelTraderStrategy(BaseStrategy):
                     allowed, s_reason = self.market_structure.validate_setup_alignment("BEARISH", asset_key, current_price=curr_close, is_bounce=False)
                     if not allowed:
                         logger.info(f"🏛️ [STRUCTURE GUARD] Breakdown blocked on {lvl.name}: {s_reason}")
+                        continue
+
+                    # Technical Indicator Confluence Check (RSI, MACD, VWAP)
+                    c_ok, c_score, c_reason, _ = self.indicators.evaluate_confluence("BEARISH", "BREAKDOWN", curr_close, asset_key)
+                    if not c_ok:
+                        logger.info(f"📊 [INDICATOR FILTER] Breakdown blocked on {lvl.name}: {c_reason}")
                         continue
 
                     vol_threshold = avg_volume * eff_vol_mult
@@ -600,6 +615,12 @@ class LevelTraderStrategy(BaseStrategy):
                         logger.info(f"🏛️ [STRUCTURE GUARD] Support bounce blocked on {lvl.name}: {s_reason}")
                         continue
 
+                    # Technical Indicator Confluence Check (RSI, MACD, VWAP)
+                    c_ok, c_score, c_reason, _ = self.indicators.evaluate_confluence("BULLISH", "BOUNCE", curr_close, asset_key)
+                    if not c_ok:
+                        logger.info(f"📊 [INDICATOR FILTER] Support bounce blocked on {lvl.name}: {c_reason}")
+                        continue
+
                     lower_wick = min(curr_open, curr_close) - curr_low
                     body = curr_close - curr_open
                     # Require confirmed bullish rejection candle with conviction and volume support
@@ -623,6 +644,12 @@ class LevelTraderStrategy(BaseStrategy):
                     allowed, s_reason = self.market_structure.validate_setup_alignment("BEARISH", asset_key, current_price=curr_close, is_bounce=True)
                     if not allowed:
                         logger.info(f"🏛️ [STRUCTURE GUARD] Resistance rejection blocked on {lvl.name}: {s_reason}")
+                        continue
+
+                    # Technical Indicator Confluence Check (RSI, MACD, VWAP)
+                    c_ok, c_score, c_reason, _ = self.indicators.evaluate_confluence("BEARISH", "REJECTION", curr_close, asset_key)
+                    if not c_ok:
+                        logger.info(f"📊 [INDICATOR FILTER] Resistance rejection blocked on {lvl.name}: {c_reason}")
                         continue
 
                     upper_wick = curr_high - max(curr_open, curr_close)

@@ -305,10 +305,10 @@ class TradingBotRunner:
         # 4. Check Strategy Exits & Multi-Session Square-Off
         self.strategy.check_exit_conditions(now)
 
-        # 5. Evaluate RMS Daily Target (₹10k) and Daily Stop Loss (₹10k)
+        # 5. Evaluate RMS Daily Target (+₹10k) and Daily Stop Loss (-₹5k)
         margins = self.broker.get_margins()
-        total_pnl = margins.get("total_pnl", 0.0)
-        breached, reason = self.risk_manager.evaluate_daily_pnl(total_pnl)
+        day_pnl = margins.get("daily_pnl", margins.get("total_pnl", 0.0))
+        breached, reason = self.risk_manager.evaluate_daily_pnl(day_pnl)
         if breached and not self._rms_halted:
             self._rms_halted = True
             self.running = False

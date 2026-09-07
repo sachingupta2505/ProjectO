@@ -33,6 +33,11 @@ class PaperBroker(BaseBroker):
         self.market_prices: Dict[str, float] = {}
         self.is_connected: bool = False
 
+        # Daily Session tracking to isolate day PnL from historical paper data
+        self.session_date: str = datetime.now().strftime("%Y-%m-%d")
+        self.daily_realized_pnl: float = 0.0
+        self.daily_charges: float = 0.0
+
         self.state_file = Path(__file__).resolve().parent.parent / "logs" / "paper_broker_state.json"
         if self.persist:
             self._load_state()
@@ -100,6 +105,9 @@ class PaperBroker(BaseBroker):
                 "initial_capital": self.initial_capital,
                 "available_cash": self.available_cash,
                 "total_charges": getattr(self, "total_charges", 0.0),
+                "session_date": self.session_date,
+                "daily_realized_pnl": getattr(self, "daily_realized_pnl", 0.0),
+                "daily_charges": getattr(self, "daily_charges", 0.0),
                 "positions": pos_dict,
                 "orders": ord_dict,
                 "trades": self.trades,
@@ -121,7 +129,18 @@ class PaperBroker(BaseBroker):
             self.initial_capital = data.get("initial_capital", self.initial_capital)
             self.available_cash = data.get("available_cash", self.available_cash)
             self.total_charges = data.get("total_charges", 0.0)
-            self.market_prices.update(data.get("market_prices", {}))
+
+            # Daily Session Isolation: only restore daily metrics if file is from today
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            saved_date = data.get("session_date", "")
+            if saved_date == today_str:
+                self.session_date = today_str
+                self.daily_realized_pnl = float(data.get("daily_realized_pnl", 0.0))
+                self.daily_charges = float(data.get("daily_charges", 0.0))
+            else:
+                self.session_date = today_str
+                self.daily_realized_pnl = 0.0
+                self.daily_charges = 0.0
 
             # Clear existing in-memory state to cleanly sync with disk
             self.positions.clear()
@@ -348,6 +367,9 @@ class PaperBroker(BaseBroker):
             "gross_realized_pnl": round(total_realized, 2),
             "unrealized_pnl": round(total_unrealized, 2),
             "total_pnl": round(net_pnl, 2),
+            "daily_pnl": round(self.daily_realized_pnl + total_unrealized - self.daily_charges, 2),
+            "daily_realized_pnl": round(self.daily_realized_pnl, 2),
+            "daily_charges": round(self.daily_charges, 2),
         }
 
     # ------------------------------------------------------------------
@@ -372,6 +394,7 @@ class PaperBroker(BaseBroker):
         order_charges = calculate_order_charges(order.side, fill_price, order.quantity, exchange=exch, asset_class=aclass)
         chg_amt = order_charges["total_charges"]
         self.total_charges = round(getattr(self, "total_charges", 0.0) + chg_amt, 2)
+        self.daily_charges = round(getattr(self, "daily_charges", 0.0) + chg_amt, 2)
         pos.charges = round(getattr(pos, "charges", 0.0) + chg_amt, 2)
         self.available_cash = round(self.available_cash - chg_amt, 2)
 
@@ -396,6 +419,7 @@ class PaperBroker(BaseBroker):
                 cover_qty = min(abs(pos.quantity), order.quantity)
                 realized = (pos.average_sell_price - fill_price) * cover_qty
                 pos.realized_pnl = round(pos.realized_pnl + realized, 2)
+                self.daily_realized_pnl = round(getattr(self, "daily_realized_pnl", 0.0) + realized, 2)
                 new_qty = pos.quantity + order.quantity
                 pos.quantity = new_qty
                 if new_qty == 0:
@@ -424,6 +448,7 @@ class PaperBroker(BaseBroker):
                 close_qty = min(pos.quantity, order.quantity)
                 realized = (fill_price - pos.average_buy_price) * close_qty
                 pos.realized_pnl = round(pos.realized_pnl + realized, 2)
+                self.daily_realized_pnl = round(getattr(self, "daily_realized_pnl", 0.0) + realized, 2)
                 new_qty = pos.quantity - order.quantity
                 pos.quantity = new_qty
                 if new_qty == 0:

@@ -22,7 +22,12 @@ import numpy as np
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from core.option_chain import calculate_black_scholes, get_next_weekly_expiry, get_atm_strike
+from core.option_chain import (
+    calculate_black_scholes,
+    get_next_weekly_expiry,
+    get_next_monthly_expiry,
+    get_atm_strike
+)
 from core.models import OptionType
 
 INDEX_SPECS = {
@@ -31,19 +36,32 @@ INDEX_SPECS = {
         "lot_size": 65,
         "min_body": 30.0,
         "strike_step": 50,
-        "expiry_weekday": 3,  # Thursday
+        "cycle": "weekly",
+        "expiry_weekday": 1,  # NSE Weekly: Tuesday
         "iv": 0.135,
         "base_premium": 100.0,
         "retest_leeway": 5.0
+    },
+    "SENSEX": {
+        "file": "data/historical/SENSEX_5m_180d.csv",
+        "lot_size": 10,
+        "min_body": 120.0,
+        "strike_step": 100,
+        "cycle": "weekly",
+        "expiry_weekday": 3,  # BSE Weekly: Thursday
+        "iv": 0.135,
+        "base_premium": 300.0,
+        "retest_leeway": 25.0
     },
     "BANKNIFTY": {
         "file": "data/historical/BANKNIFTY_5m_180d.csv",
         "lot_size": 15,
         "min_body": 80.0,
         "strike_step": 100,
-        "expiry_weekday": 2,  # Wednesday
+        "cycle": "monthly",   # Monthly only under SEBI rules
+        "expiry_weekday": 1,  # Last Tuesday of month
         "iv": 0.155,
-        "base_premium": 250.0,
+        "base_premium": 450.0, # Monthly options have higher base premium
         "retest_leeway": 15.0
     },
     "FINNIFTY": {
@@ -51,9 +69,10 @@ INDEX_SPECS = {
         "lot_size": 40,
         "min_body": 30.0,
         "strike_step": 50,
-        "expiry_weekday": 1,  # Tuesday
+        "cycle": "monthly",   # Monthly only under SEBI rules
+        "expiry_weekday": 1,  # Last Tuesday of month
         "iv": 0.140,
-        "base_premium": 100.0,
+        "base_premium": 200.0, # Monthly options have higher base premium
         "retest_leeway": 5.0
     },
     "MIDCPNIFTY": {
@@ -61,20 +80,11 @@ INDEX_SPECS = {
         "lot_size": 50,
         "min_body": 20.0,
         "strike_step": 25,
-        "expiry_weekday": 0,  # Monday
+        "cycle": "monthly",   # Monthly only under SEBI rules
+        "expiry_weekday": 1,  # Last Tuesday of month
         "iv": 0.145,
-        "base_premium": 60.0,
+        "base_premium": 120.0, # Monthly options have higher base premium
         "retest_leeway": 3.0
-    },
-    "SENSEX": {
-        "file": "data/historical/SENSEX_5m_180d.csv",
-        "lot_size": 10,
-        "min_body": 120.0,
-        "strike_step": 100,
-        "expiry_weekday": 4,  # Friday
-        "iv": 0.135,
-        "base_premium": 300.0,
-        "retest_leeway": 25.0
     }
 }
 
@@ -97,6 +107,7 @@ def backtest_index(symbol: str, config: dict) -> pd.DataFrame:
     min_body = config["min_body"]
     strike_step = config["strike_step"]
     expiry_weekday = config["expiry_weekday"]
+    cycle = config.get("cycle", "weekly")
     iv = config["iv"]
     leeway = config["retest_leeway"]
 
@@ -159,7 +170,11 @@ def backtest_index(symbol: str, config: dict) -> pd.DataFrame:
         if not in_trade:
             continue
 
-        expiry_date = get_next_weekly_expiry(d, weekday=expiry_weekday)
+        if cycle == "weekly":
+            expiry_date = get_next_weekly_expiry(d, weekday=expiry_weekday)
+        else:
+            expiry_date = get_next_monthly_expiry(d, weekday=expiry_weekday)
+
         entry_ts = day_bars.iloc[entry_bar_idx]["timestamp"]
         expiry_ts = datetime.combine(expiry_date, time(15, 30))
         time_to_exp_entry = max(0.0001, (expiry_ts - entry_ts).total_seconds() / (365.25 * 86400))

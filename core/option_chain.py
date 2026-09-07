@@ -21,10 +21,12 @@ def get_strikes_around_atm(spot_price: float, count: int = 5, strike_step: int =
     return sorted(strikes)
 
 
-def get_next_weekly_expiry(from_date: Optional[date] = None, weekday: int = 3) -> date:
+def get_next_weekly_expiry(from_date: Optional[date] = None, weekday: int = 1) -> date:
     """
-    Get the next weekly expiry date (Default Thursday = 3 in Python datetime).
-    If today is Thursday, returns today if before 15:30 IST, else next Thursday.
+    Get the next weekly expiry date.
+    NSE NIFTY weekly expiry is Tuesday (weekday = 1).
+    BSE SENSEX weekly expiry is Thursday (weekday = 3).
+    If today is the expiry day and time is past 15:30 IST, returns next week's expiry.
     """
     now = datetime.now()
     if from_date is None:
@@ -38,18 +40,34 @@ def get_next_weekly_expiry(from_date: Optional[date] = None, weekday: int = 3) -
     return from_date + timedelta(days=days_ahead)
 
 
-def get_monthly_expiry(year: int, month: int, weekday: int = 3) -> date:
-    """Get the last Thursday of the given month and year."""
-    # Start at the last day of the month
+def get_monthly_expiry(year: int, month: int, weekday: int = 1) -> date:
+    """Get the last designated weekday (default Tuesday = 1) of the given month and year."""
     if month == 12:
         last_day = date(year, 12, 31)
     else:
         last_day = date(year, month + 1, 1) - timedelta(days=1)
 
-    # Walk backwards until finding the desired weekday
     while last_day.weekday() != weekday:
         last_day -= timedelta(days=1)
     return last_day
+
+
+def get_next_monthly_expiry(from_date: Optional[date] = None, weekday: int = 1) -> date:
+    """
+    Get the nearest upcoming monthly expiry date (default last Tuesday of month).
+    Used for BANKNIFTY, FINNIFTY, MIDCPNIFTY (which have monthly expiries under SEBI rules).
+    """
+    now = datetime.now()
+    if from_date is None:
+        from_date = now.date()
+
+    exp = get_monthly_expiry(from_date.year, from_date.month, weekday=weekday)
+    if from_date > exp or (from_date == exp and now.hour >= 15 and now.minute >= 30):
+        if from_date.month == 12:
+            exp = get_monthly_expiry(from_date.year + 1, 1, weekday=weekday)
+        else:
+            exp = get_monthly_expiry(from_date.year, from_date.month + 1, weekday=weekday)
+    return exp
 
 
 def format_nifty_symbol(

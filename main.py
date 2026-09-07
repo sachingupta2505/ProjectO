@@ -33,6 +33,7 @@ from brokers.angel_broker import AngelOneBroker
 from strategies.level_trader import LevelTraderStrategy
 from strategies.short_straddle import ShortStraddleStrategy
 from strategies.momentum_buyer import MomentumBuyerStrategy
+from strategies.opening_retest_trader import OpeningRetestStrategy
 from dashboard.terminal_ui import render_dashboard
 from telegram_bridge.bot import TelegramBridge
 from rich.live import Live
@@ -47,6 +48,7 @@ class TradingBotRunner:
         strategy_type: str = "sr_trader",
         lots: int = 1,
         is_paper: bool = True,
+        index_symbol: str = "NIFTY",
         telegram_token: Optional[str] = None,
         telegram_chat_id: Optional[str] = None
     ):
@@ -54,6 +56,7 @@ class TradingBotRunner:
         self.strategy_type = strategy_type.lower()
         self.lots = lots
         self.is_paper = is_paper
+        self.index_symbol = index_symbol.upper()
         self.running = False
         self._rms_halted = False
         self._last_bar_time = 0.0
@@ -83,19 +86,36 @@ class TradingBotRunner:
             self.broker = PaperBroker(
                 initial_capital=settings.PAPER_INITIAL_CAPITAL,
                 slippage_pct=settings.SLIPPAGE_PCT,
-                persist=True
+                brokerage_per_order=settings.BROKERAGE_PER_ORDER,
+                exchange_txn_tax_pct=settings.EXCHANGE_TXN_TAX_PCT,
+                stt_ctt_pct=settings.STT_CTT_PCT,
+                sebi_turnover_pct=settings.SEBI_TURNOVER_PCT,
+                stamp_duty_pct=settings.STAMP_DUTY_PCT,
+                gst_pct=settings.GST_PCT
             )
         elif self.broker_type == "angel":
             self.broker = AngelOneBroker()
         else:
             raise ValueError(f"Unsupported broker: {broker_type}")
 
-        # Initialize Strategy (Default: Multi-Asset S/R Level Trader)
-        if self.strategy_type in ("sr_trader", "level_trader", "sr", "levels"):
+        # Initialize Strategy
+        if self.strategy_type in ["sr_trader", "level_trader"]:
             self.strategy = LevelTraderStrategy(
                 broker=self.broker,
                 risk_manager=self.risk_manager,
                 lots=self.lots
+            )
+        elif self.strategy_type in ["opening_retest", "retest"]:
+            min_body = 120.0 if self.index_symbol == "SENSEX" else (80.0 if self.index_symbol == "BANKNIFTY" else 30.0)
+            leeway = 25.0 if self.index_symbol == "SENSEX" else (15.0 if self.index_symbol == "BANKNIFTY" else 5.0)
+            self.strategy = OpeningRetestStrategy(
+                broker=self.broker,
+                risk_manager=self.risk_manager,
+                symbol=self.index_symbol,
+                lots=self.lots,
+                min_body_points=min_body,
+                retest_leeway=leeway,
+                telegram=self.telegram
             )
         elif self.strategy_type == "straddle":
             self.strategy = ShortStraddleStrategy(
@@ -349,8 +369,9 @@ def main():
     parser = argparse.ArgumentParser(description="Multi-Asset Algorithmic Trading Bot (NIFTY 50 & CRUDE OIL)")
     parser.add_argument("--mode", choices=["paper", "live"], default="paper", help="Execution mode: paper or live")
     parser.add_argument("--broker", choices=["paper", "angel"], default="paper", help="Broker adapter to use")
-    parser.add_argument("--strategy", choices=["sr_trader", "level_trader", "straddle", "momentum"], default="sr_trader", help="Strategy to trade (default: sr_trader)")
-    parser.add_argument("--lots", type=int, default=getattr(settings, "DEFAULT_LOTS", 2), help="Number of lots to trade")
+    parser.add_argument("--strategy", choices=["sr_trader", "level_trader", "straddle", "momentum", "opening_retest", "retest"], default="sr_trader", help="Strategy to trade (default: sr_trader)")
+    parser.add_argument("--index", choices=["NIFTY", "FINNIFTY", "SENSEX", "BANKNIFTY"], default="NIFTY", help="Target index for opening retest (default: NIFTY)")
+    parser.add_argument("--lots", type=int, default=getattr(settings, "DEFAULT_LOTS", 1), help="Number of lots to trade")
     parser.add_argument("--ui", choices=["terminal", "web", "headless"], default="headless", help="UI to display")
     parser.add_argument("--simulate", action="store_true", help="Simulate ticks for testing")
     parser.add_argument("--spot", type=float, default=23950.0, help="Initial Nifty spot price benchmark")
@@ -373,6 +394,7 @@ def main():
         strategy_type=args.strategy,
         lots=args.lots,
         is_paper=is_paper,
+        index_symbol=args.index,
         telegram_token=args.telegram_token,
         telegram_chat_id=args.telegram_chat_id
     )

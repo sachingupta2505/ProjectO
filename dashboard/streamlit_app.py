@@ -24,7 +24,8 @@ from core.option_chain import (
 from brokers.paper_broker import PaperBroker
 from brokers.angel_broker import AngelOneBroker
 from core.risk_manager import RiskManager
-from strategies.short_straddle import ShortStraddleStrategy
+from strategies.opening_retest_trader import OpeningRetestStrategy
+from strategies.theta_decay_trader import ThetaDecayTraderStrategy
 from core.market_data import get_live_nifty_spot, get_live_banknifty_spot, get_live_crude_spot
 from config.settings import settings
 from core.strategy_ledger import strategy_ledger
@@ -489,9 +490,11 @@ def render_dashboard():
         st.session_state.spot_price = 24500.0
 
     if "strategy" not in st.session_state:
-        st.session_state.strategy = ShortStraddleStrategy(
+        st.session_state.strategy = OpeningRetestStrategy(
             broker=st.session_state.paper_broker,
-            risk_manager=st.session_state.risk_manager
+            risk_manager=st.session_state.risk_manager,
+            symbol="NIFTY",
+            lots=2
         )
         st.session_state.strategy.initialize()
 
@@ -530,7 +533,7 @@ def render_dashboard():
         )
         cap_val = 50000.0 if "50,000" in cap_option else (100000.0 if "1,00,000" in cap_option else (200000.0 if "2,00,000" in cap_option else 500000.0))
         if st.button("🔄 Reset Core Accounts (₹" + f"{int(cap_val/1000)}k each)", use_container_width=True):
-            for name in ["orion", "theta", "cpr", "ict", "default"]:
+            for name in ["orion", "theta", "default"]:
                 PaperBroker(account_name=name, persist=True).reset_account(cap_val)
             st.session_state.paper_broker.reset_account(cap_val)
             st.success(f"✅ Core Strategy accounts reset to ₹{cap_val:,.2f} each (Total: ₹{cap_val*2:,.2f})!")
@@ -544,9 +547,7 @@ def render_dashboard():
             [
                 "🌟 Core Duo Portfolio (ORION-15 + THETA-0DTE)",
                 "🚀 ORION-15 (Opening Retest)",
-                "⏳ THETA-0DTE (Expiry Scalp)",
-                "🏛️ CPR-Institutional (Archive)",
-                "⚡ ICT-Liquidity (Archive)"
+                "⏳ THETA-0DTE (Expiry Scalp)"
             ],
             index=0
         )
@@ -734,21 +735,15 @@ def render_dashboard():
             selected_strat = st.selectbox(
                 "Select Strategy Ledger",
                 [
+                    "🌟 Core Duo Portfolio (ORION-15 + THETA-0DTE)",
                     "🚀 ORION-15 (Opening Retest)",
-                    "🏛️ CPR-Institutional (Pivot Engine)",
-                    "⚡ ICT-Liquidity (Sweep & FVG)",
-                    "⏳ THETA-0DTE (Expiry Scalp)",
-                    "🌐 Combined Multi-Strategy Portfolio"
+                    "⏳ THETA-0DTE (Expiry Scalp)"
                 ],
                 index=0
             )
         with ctrl_col2:
             if "ORION" in selected_strat:
                 strat_key = "orion"
-            elif "CPR" in selected_strat:
-                strat_key = "cpr"
-            elif "ICT" in selected_strat:
-                strat_key = "ict"
             elif "THETA" in selected_strat:
                 strat_key = "theta"
             else:
@@ -765,7 +760,7 @@ def render_dashboard():
 
         if strat_key == "combined":
             trades_list = []
-            for k in ["orion", "cpr", "ict", "theta"]:
+            for k in ["orion", "theta"]:
                 trades_list.extend(strategy_ledger.load_trades(k, source="all"))
             trades_list.sort(key=lambda x: str(x.get("date", "")) + str(x.get("entry_time", "")))
             tot_t = len(trades_list)

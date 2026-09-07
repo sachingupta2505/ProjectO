@@ -14,20 +14,17 @@ from brokers.paper_broker import PaperBroker
 from core.risk_manager import RiskManager
 from core.models import Tick
 from strategies.opening_retest_trader import OpeningRetestStrategy
-from strategies.cpr_trader import CPRTraderStrategy
-from strategies.ict_sweep_trader import ICTSweepTraderStrategy
 from strategies.theta_decay_trader import ThetaDecayTraderStrategy
 
-logger = get_logger("MultiStrategyEngine")
+logger = get_logger("CoreDuoEngine")
 
 
 class MultiStrategyEngine:
     """
-    Orchestrates concurrent execution of all 4 algorithmic trading strategies:
-    1. ORION-15 (Opening Retest)
-    2. CPR-Institutional (Central Pivot Range Engine)
-    3. ICT-Liquidity (PDH/PDL Sweep & FVG)
-    4. THETA-0DTE (Expiry Day Afternoon Strangle)
+    Core Duo Orchestrator:
+    Concurrently executes the two highest-probability, proven strategies:
+    1. ORION-15 (Opening 15m Retest Momentum Engine)
+    2. THETA-0DTE (Afternoon Weekly Expiry Strangle Decay Engine)
     """
 
     def __init__(
@@ -44,55 +41,34 @@ class MultiStrategyEngine:
         self.telegram = telegram
         self.active_keys = [k.lower() for k in active_strategies] if active_strategies else ["orion", "theta"]
 
-        # 1. Instantiate Isolated Paper Brokers for active strategies
-        all_brokers = {
-            "orion": lambda: PaperBroker(account_name="orion", initial_capital=initial_capital_per_strat, persist=True),
-            "cpr": lambda: PaperBroker(account_name="cpr", initial_capital=initial_capital_per_strat, persist=True),
-            "ict": lambda: PaperBroker(account_name="ict", initial_capital=initial_capital_per_strat, persist=True),
-            "theta": lambda: PaperBroker(account_name="theta", initial_capital=initial_capital_per_strat, persist=True),
-        }
+        # 1. Instantiate Isolated Paper Brokers for Core Duo (₹1,00,000 each)
         self.brokers: Dict[str, PaperBroker] = {
-            k: all_brokers[k]() for k in self.active_keys if k in all_brokers
+            "orion": PaperBroker(account_name="orion", initial_capital=initial_capital_per_strat, persist=True),
+            "theta": PaperBroker(account_name="theta", initial_capital=initial_capital_per_strat, persist=True),
         }
 
         # 2. Instantiate Decoupled Risk Managers
         self.risk_managers: Dict[str, RiskManager] = {
-            k: RiskManager() for k in self.active_keys
+            "orion": RiskManager(),
+            "theta": RiskManager(),
         }
 
-        # 3. Instantiate Strategies
-        all_strats = {
-            "orion": lambda: OpeningRetestStrategy(
+        # 3. Instantiate Core Duo Strategies
+        self.strategies = {
+            "orion": OpeningRetestStrategy(
                 broker=self.brokers["orion"],
                 risk_manager=self.risk_managers["orion"],
                 lots=self.lots,
                 symbol=self.symbol,
                 telegram=self.telegram
             ),
-            "cpr": lambda: CPRTraderStrategy(
-                broker=self.brokers["cpr"],
-                risk_manager=self.risk_managers["cpr"],
-                lots=self.lots,
-                symbol=self.symbol,
-                telegram_notifier=self.telegram
-            ),
-            "ict": lambda: ICTSweepTraderStrategy(
-                broker=self.brokers["ict"],
-                risk_manager=self.risk_managers["ict"],
-                lots=self.lots,
-                symbol=self.symbol,
-                telegram_notifier=self.telegram
-            ),
-            "theta": lambda: ThetaDecayTraderStrategy(
+            "theta": ThetaDecayTraderStrategy(
                 broker=self.brokers["theta"],
                 risk_manager=self.risk_managers["theta"],
                 lots=self.lots,
                 symbol=self.symbol,
                 telegram_notifier=self.telegram
             )
-        }
-        self.strategies = {
-            k: all_strats[k]() for k in self.active_keys if k in all_strats
         }
 
     def initialize(self):

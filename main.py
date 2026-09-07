@@ -98,14 +98,18 @@ class TradingBotRunner:
         else:
             raise ValueError(f"Unsupported broker: {broker_type}")
 
-        # Initialize Strategy
-        if self.strategy_type in ["sr_trader", "level_trader"]:
-            self.strategy = LevelTraderStrategy(
-                broker=self.broker,
-                risk_manager=self.risk_manager,
-                lots=self.lots
+        # Initialize Strategy (Core Duo Focus)
+        if self.strategy_type in ["duo", "core_duo", "multi", "all"]:
+            from core.multi_strategy_engine import MultiStrategyEngine
+            self.multi_engine = MultiStrategyEngine(
+                lots=self.lots,
+                symbol=self.index_symbol,
+                initial_capital_per_strat=100000.0,
+                telegram=self.telegram,
+                active_strategies=["orion", "theta"]
             )
-        elif self.strategy_type in ["opening_retest", "retest"]:
+            self.strategy = self.multi_engine.strategies["orion"]
+        elif self.strategy_type in ["orion", "opening_retest", "retest"]:
             min_body = 120.0 if self.index_symbol == "SENSEX" else (80.0 if self.index_symbol == "BANKNIFTY" else 30.0)
             leeway = 25.0 if self.index_symbol == "SENSEX" else (15.0 if self.index_symbol == "BANKNIFTY" else 5.0)
             self.strategy = OpeningRetestStrategy(
@@ -117,45 +121,7 @@ class TradingBotRunner:
                 retest_leeway=leeway,
                 telegram=self.telegram
             )
-        elif self.strategy_type in ["duo", "core_duo"]:
-            from core.multi_strategy_engine import MultiStrategyEngine
-            self.multi_engine = MultiStrategyEngine(
-                lots=self.lots,
-                symbol=self.index_symbol,
-                initial_capital_per_strat=100000.0,
-                telegram=self.telegram,
-                active_strategies=["orion", "theta"]
-            )
-            self.strategy = self.multi_engine.strategies["orion"]
-        elif self.strategy_type in ["multi", "all", "portfolio"]:
-            from core.multi_strategy_engine import MultiStrategyEngine
-            self.multi_engine = MultiStrategyEngine(
-                lots=self.lots,
-                symbol=self.index_symbol,
-                initial_capital_per_strat=100000.0,
-                telegram=self.telegram,
-                active_strategies=["orion", "cpr", "ict", "theta"]
-            )
-            self.strategy = self.multi_engine.strategies["orion"]
-        elif self.strategy_type == "cpr":
-            from strategies.cpr_trader import CPRTraderStrategy
-            self.strategy = CPRTraderStrategy(
-                broker=self.broker,
-                risk_manager=self.risk_manager,
-                lots=self.lots,
-                symbol=self.index_symbol,
-                telegram_notifier=self.telegram
-            )
-        elif self.strategy_type == "ict":
-            from strategies.ict_sweep_trader import ICTSweepTraderStrategy
-            self.strategy = ICTSweepTraderStrategy(
-                broker=self.broker,
-                risk_manager=self.risk_manager,
-                lots=self.lots,
-                symbol=self.index_symbol,
-                telegram_notifier=self.telegram
-            )
-        elif self.strategy_type == "theta":
+        elif self.strategy_type in ["theta", "theta_0dte"]:
             from strategies.theta_decay_trader import ThetaDecayTraderStrategy
             self.strategy = ThetaDecayTraderStrategy(
                 broker=self.broker,
@@ -164,20 +130,8 @@ class TradingBotRunner:
                 symbol=self.index_symbol,
                 telegram_notifier=self.telegram
             )
-        elif self.strategy_type == "straddle":
-            self.strategy = ShortStraddleStrategy(
-                broker=self.broker,
-                risk_manager=self.risk_manager,
-                lots=self.lots
-            )
-        elif self.strategy_type == "momentum":
-            self.strategy = MomentumBuyerStrategy(
-                broker=self.broker,
-                risk_manager=self.risk_manager,
-                lots=self.lots
-            )
         else:
-            raise ValueError(f"Unsupported strategy: {strategy_type}")
+            raise ValueError(f"Unsupported strategy: {self.strategy_type}. Choose 'duo', 'orion', or 'theta'.")
 
         # Graceful shutdown handlers
         signal.signal(signal.SIGINT, self._handle_shutdown)
@@ -467,7 +421,7 @@ def main():
     parser = argparse.ArgumentParser(description="Multi-Asset Algorithmic Trading Bot (NIFTY 50 & CRUDE OIL)")
     parser.add_argument("--mode", choices=["paper", "live"], default="paper", help="Execution mode: paper or live")
     parser.add_argument("--broker", choices=["paper", "angel"], default="paper", help="Broker adapter to use")
-    parser.add_argument("--strategy", choices=["duo", "core_duo", "multi", "all", "opening_retest", "retest", "cpr", "ict", "theta", "sr_trader", "level_trader", "straddle", "momentum"], default="duo", help="Strategy to trade (default: duo [ORION-15 + THETA-0DTE])")
+    parser.add_argument("--strategy", choices=["duo", "orion", "theta"], default="duo", help="Strategy to trade (default: duo [ORION-15 + THETA-0DTE])")
     parser.add_argument("--index", choices=["NIFTY", "FINNIFTY", "SENSEX", "BANKNIFTY"], default="NIFTY", help="Target index for opening retest (default: NIFTY)")
     parser.add_argument("--lots", type=int, default=getattr(settings, "DEFAULT_LOTS", 1), help="Number of lots to trade")
     parser.add_argument("--ui", choices=["terminal", "web", "headless"], default="headless", help="UI to display")

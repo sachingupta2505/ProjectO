@@ -521,10 +521,29 @@ def render_dashboard():
 
         st.divider()
 
+        # Capital Management & Reset
+        st.subheader("💰 Capital Management")
+        cap_option = st.selectbox(
+            "Set Starting Capital",
+            ["₹50,000", "₹1,00,000 (Recommended)", "₹2,00,000", "₹5,00,000"],
+            index=1
+        )
+        cap_val = 50000.0 if "50,000" in cap_option else (100000.0 if "1,00,000" in cap_option else (200000.0 if "2,00,000" in cap_option else 500000.0))
+        if st.button("🔄 Reset Capital to " + cap_option.split(" ")[0], use_container_width=True):
+            st.session_state.paper_broker.reset_account(cap_val)
+            st.success(f"✅ Capital cleanly reset to ₹{cap_val:,.2f}! Orders and positions cleared.")
+            st.rerun()
+
+        st.divider()
+
         st.subheader("⚙️ Strategy Settings")
-        strat_type = st.selectbox("Active Strategy", ["9:20 AM Short Straddle", "Momentum Option Buyer"])
-        lots = st.number_input("Nifty Lots (1 Lot = 65 Qty)", min_value=1, max_value=20, value=2)
-        sl_pct = st.slider("Leg Stop Loss (%)", min_value=10, max_value=60, value=25, step=5)
+        strat_type = st.selectbox(
+            "Active Strategy",
+            ["ORION-15 (Opening Retest)", "Dual-Asset S/R Level Trader", "9:20 AM Short Straddle", "Momentum Option Buyer"],
+            index=0
+        )
+        lots = st.number_input("Contract Lots (1 Lot = 65 Qty)", min_value=1, max_value=10, value=1)
+        sl_pct = st.slider("Max Option Risk Cap (%)", min_value=10, max_value=50, value=25, step=5)
 
         st.divider()
 
@@ -606,14 +625,16 @@ def render_dashboard():
     else:
         margins = st.session_state.paper_broker.get_margins()
         tot_pnl = margins["total_pnl"]
-        gross_pnl = margins.get("gross_pnl", tot_pnl)
+        init_cap = margins.get("initial_capital", 100000.0)
+        avail_cash = margins.get("available_cash", 100000.0)
         charges = margins.get("total_charges", 0.0)
+        
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Net Total PnL", f"₹{tot_pnl:+,.2f}", delta=f"{tot_pnl:+,.2f}", delta_color="normal")
-        m2.metric("Gross PnL", f"₹{gross_pnl:+,.2f}")
-        m3.metric("Charges & Taxes", f"-₹{charges:,.2f}")
-        m4.metric("Realized PnL (Net)", f"₹{margins['realized_pnl']:+,.2f}")
-        m5.metric("Available Cash", f"₹{margins['available_cash']:,.2f}")
+        m1.metric("💰 Starting Capital", f"₹{init_cap:,.2f}", "Baseline")
+        m2.metric("💵 Available Funds", f"₹{avail_cash:,.2f}", f"₹{margins.get('margin_used', 0.0):,.2f} Used")
+        m3.metric("📈 Today's Net Profit", f"₹{tot_pnl:+,.2f}", delta=f"{tot_pnl:+,.2f}", delta_color="normal")
+        m4.metric("🎯 Active Strategy", "ORION-15 (NIFTY)", "1 Lot (65 Qty) Paper")
+        m5.metric("🤖 Bot Daemon", "🟢 Standby", "Armed for 09:15 AM")
 
     st.divider()
 

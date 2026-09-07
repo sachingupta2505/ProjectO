@@ -227,6 +227,20 @@ class PaperBroker(BaseBroker):
         except Exception as e:
             logger.debug(f"Failed to load paper broker state: {e}")
 
+    def reset_account(self, initial_capital: float = 100000.0):
+        """Resets paper account to fresh starting capital and clears positions, orders, and charges."""
+        self.initial_capital = initial_capital
+        self.available_cash = initial_capital
+        self.total_charges = 0.0
+        self.daily_realized_pnl = 0.0
+        self.daily_charges = 0.0
+        self.positions.clear()
+        self.orders.clear()
+        self.trades.clear()
+        if self.persist:
+            self._save_state()
+        logger.info(f"🔄 Paper account reset to fresh balance: ₹{initial_capital:,.2f}")
+
     def authenticate(self) -> bool:
         self.is_connected = True
         self._load_state()

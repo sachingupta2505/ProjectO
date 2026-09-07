@@ -540,7 +540,7 @@ class LevelTraderStrategy(BaseStrategy):
                 ref_price = lvl.range_high if lvl.range_high is not None else lvl.price
                 if prev_close < ref_price and curr_close > ref_price:
                     # Enforce Market Structure Alignment (no breakout against downtrend)
-                    allowed, s_reason = self.market_structure.validate_setup_alignment("BULLISH", asset_key)
+                    allowed, s_reason = self.market_structure.validate_setup_alignment("BULLISH", asset_key, current_price=curr_close, is_bounce=False)
                     if not allowed:
                         logger.info(f"🏛️ [STRUCTURE GUARD] Breakout blocked on {lvl.name}: {s_reason}")
                         continue
@@ -565,7 +565,7 @@ class LevelTraderStrategy(BaseStrategy):
                 ref_price = lvl.range_low if lvl.range_low is not None else lvl.price
                 if prev_close > ref_price and curr_close < ref_price:
                     # Enforce Market Structure Alignment (no breakdown against uptrend)
-                    allowed, s_reason = self.market_structure.validate_setup_alignment("BEARISH", asset_key)
+                    allowed, s_reason = self.market_structure.validate_setup_alignment("BEARISH", asset_key, current_price=curr_close, is_bounce=False)
                     if not allowed:
                         logger.info(f"🏛️ [STRUCTURE GUARD] Breakdown blocked on {lvl.name}: {s_reason}")
                         continue
@@ -595,7 +595,7 @@ class LevelTraderStrategy(BaseStrategy):
 
                 if curr_low <= (ref_high + tolerance) and curr_close > curr_open and curr_close >= ref_low:
                     # Enforce Market Structure Alignment (no buying calls into strong downtrend)
-                    allowed, s_reason = self.market_structure.validate_setup_alignment("BULLISH", asset_key)
+                    allowed, s_reason = self.market_structure.validate_setup_alignment("BULLISH", asset_key, current_price=curr_close, is_bounce=True)
                     if not allowed:
                         logger.info(f"🏛️ [STRUCTURE GUARD] Support bounce blocked on {lvl.name}: {s_reason}")
                         continue
@@ -620,7 +620,7 @@ class LevelTraderStrategy(BaseStrategy):
 
                 if curr_high >= (ref_low - tolerance) and curr_close < curr_open and curr_close <= ref_high:
                     # Enforce Market Structure Alignment (no shorting into strong uptrend)
-                    allowed, s_reason = self.market_structure.validate_setup_alignment("BEARISH", asset_key)
+                    allowed, s_reason = self.market_structure.validate_setup_alignment("BEARISH", asset_key, current_price=curr_close, is_bounce=True)
                     if not allowed:
                         logger.info(f"🏛️ [STRUCTURE GUARD] Resistance rejection blocked on {lvl.name}: {s_reason}")
                         continue
@@ -646,8 +646,13 @@ class LevelTraderStrategy(BaseStrategy):
             # 1. Determine Chart-Level Structural Target & SL from actual levels
             active_nifty_lvls = [l for l in self.levels if l.is_active and l.symbol.upper() == "NIFTY"]
             if option_type == OptionType.CE:
-                # Bullish (Call): Target is the next overhead resistance level
-                res_above = [l for l in active_nifty_lvls if l.price > (spot + 8.0)]
+                # Bullish (Call): Target is the next distinct overhead resistance level
+                res_above = [
+                    l for l in active_nifty_lvls 
+                    if l.id != level.id 
+                    and l.level_type in (LevelType.RESISTANCE.value, LevelType.SUPPLY_ZONE.value)
+                    and l.price > (spot + 15.0)
+                ]
                 target_level = min(res_above, key=lambda x: x.price) if res_above else None
                 spot_target_pts = (target_level.price - spot) if target_level else getattr(level, "target_spot_pts", 40.0)
                 spot_target_pts = max(30.0, min(85.0, spot_target_pts))
@@ -657,8 +662,13 @@ class LevelTraderStrategy(BaseStrategy):
                 invalidation = ref_low - 5.0
                 spot_sl_pts = max(10.0, min(25.0, spot - invalidation))
             else:
-                # Bearish (Put): Target is the next underlying support level
-                sup_below = [l for l in active_nifty_lvls if l.price < (spot - 8.0)]
+                # Bearish (Put): Target is the next distinct underlying support level
+                sup_below = [
+                    l for l in active_nifty_lvls 
+                    if l.id != level.id 
+                    and l.level_type in (LevelType.SUPPORT.value, LevelType.DEMAND_ZONE.value)
+                    and l.price < (spot - 15.0)
+                ]
                 target_level = max(sup_below, key=lambda x: x.price) if sup_below else None
                 spot_target_pts = (spot - target_level.price) if target_level else getattr(level, "target_spot_pts", 40.0)
                 spot_target_pts = max(30.0, min(85.0, spot_target_pts))
@@ -718,7 +728,12 @@ class LevelTraderStrategy(BaseStrategy):
 
             active_crude_lvls = [l for l in self.levels if l.is_active and l.symbol.upper() == "CRUDEOIL"]
             if is_bullish:
-                res_above = [l for l in active_crude_lvls if l.price > (spot + 10.0)]
+                res_above = [
+                    l for l in active_crude_lvls 
+                    if l.id != level.id 
+                    and l.level_type in (LevelType.RESISTANCE.value, LevelType.SUPPLY_ZONE.value)
+                    and l.price > (spot + 20.0)
+                ]
                 target_level = min(res_above, key=lambda x: x.price) if res_above else None
                 pts_target = (target_level.price - spot) if target_level else getattr(level, "target_spot_pts", 50.0)
                 pts_target = max(35.0, min(90.0, pts_target))
@@ -726,7 +741,12 @@ class LevelTraderStrategy(BaseStrategy):
                 ref_low = level.range_low if level.range_low is not None else level.price
                 pts_sl = max(15.0, min(30.0, spot - (ref_low - 10.0)))
             else:
-                sup_below = [l for l in active_crude_lvls if l.price < (spot - 10.0)]
+                sup_below = [
+                    l for l in active_crude_lvls 
+                    if l.id != level.id 
+                    and l.level_type in (LevelType.SUPPORT.value, LevelType.DEMAND_ZONE.value)
+                    and l.price < (spot - 20.0)
+                ]
                 target_level = max(sup_below, key=lambda x: x.price) if sup_below else None
                 pts_target = (spot - target_level.price) if target_level else getattr(level, "target_spot_pts", 50.0)
                 pts_target = max(35.0, min(90.0, pts_target))

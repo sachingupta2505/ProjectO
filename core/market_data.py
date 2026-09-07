@@ -48,6 +48,8 @@ def get_live_nifty_spot(force_refresh: bool = False) -> Dict[str, Any]:
 
     # Attempt 0: Instant Angel One WebSocket feed (< 1ms, zero HTTP requests)
     ws_nifty: Optional[float] = None
+    ws_open: Optional[float] = None
+    ws_close: Optional[float] = None
     # (a) Read from shared multi-token file (works across processes)
     try:
         import json as _json
@@ -59,6 +61,10 @@ def get_live_nifty_spot(force_refresh: bool = False) -> Dict[str, Any]:
                 item = _payload[t]
                 if now_ts - item.get("ts", 0) < 10:
                     ws_nifty = float(item["ltp"])
+                    if item.get("open"):
+                        ws_open = float(item["open"])
+                    if item.get("close"):
+                        ws_close = float(item["close"])
                     break
     except Exception:
         pass
@@ -72,9 +78,10 @@ def get_live_nifty_spot(force_refresh: bool = False) -> Dict[str, Any]:
             pass
 
     if ws_nifty and ws_nifty > 0:
-        prev_close = _CACHE.get("prev_close", ws_nifty) if _CACHE else ws_nifty
+        prev_close = ws_close if (ws_close and ws_close > 0) else (_CACHE.get("prev_close", ws_nifty) if _CACHE else ws_nifty)
         day_high = max(_CACHE.get("high", ws_nifty), ws_nifty) if _CACHE else ws_nifty
         day_low = min(_CACHE.get("low", ws_nifty), ws_nifty) if _CACHE else ws_nifty
+        day_open = ws_open if (ws_open and ws_open > 0) else (_CACHE.get("open", ws_nifty) if _CACHE else ws_nifty)
         change = round(ws_nifty - prev_close, 2)
         pct_change = round((change / prev_close) * 100.0, 2) if prev_close else 0.0
 
@@ -85,7 +92,7 @@ def get_live_nifty_spot(force_refresh: bool = False) -> Dict[str, Any]:
             "pct_change": pct_change,
             "high": day_high,
             "low": day_low,
-            "open": _CACHE.get("open", ws_nifty) if _CACHE else ws_nifty,
+            "open": day_open,
             "prev_close": prev_close,
             "advances": "N/A",
             "declines": "N/A",

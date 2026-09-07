@@ -107,7 +107,28 @@ def test_active_trade_optimizer():
     print("✅ All Active Trade Optimizer Tests Passed!\n")
 
 
+def test_macro_bias_and_bounce_suppression():
+    print("--- 3. Testing Macro Bias & Counter-Trend Bounce Suppression ---")
+    mse = MarketStructureEngine(ema_period=5)
+    mse.set_day_open("NIFTY", 23883.0)
+
+    # Price at 23800 is 83 points below Day Open (Macro Bearish)
+    for p in [23805, 23803, 23801, 23802, 23803]:
+        mse.update_bar({"symbol": "NIFTY", "close": p, "high": p + 2, "low": p - 2, "volume": 10000, "day_open": 23883.0})
+
+    macro = mse.get_macro_bias("NIFTY", 23803.0)
+    assert macro == "BEARISH", f"Expected BEARISH macro bias, got {macro}"
+
+    # Bounce attempt under EMA-20 while macro bias is BEARISH -> MUST BE BLOCKED
+    allowed, reason = mse.validate_setup_alignment("BULLISH", "NIFTY", current_price=23798.0, is_bounce=True)
+    assert allowed is False, "Counter-trend bounce should be blocked when below EMA in macro downtrend!"
+    assert "BEARISH" in reason, f"Expected BEARISH reason, got: {reason}"
+    print(f"Verified bounce blocked: {reason}")
+    print("✅ Macro Bias Tests Passed!\n")
+
+
 if __name__ == "__main__":
     test_market_structure()
     test_active_trade_optimizer()
+    test_macro_bias_and_bounce_suppression()
     print("🎉 ALL TESTS PASSED SUCCESSFULLY!")

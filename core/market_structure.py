@@ -30,9 +30,10 @@ class MarketStructureEngine:
             "CRUDEOIL": deque(maxlen=history_len)
         }
 
-        # Cached indicator states
+        # Indicator and session states
         self.ema_values: Dict[str, float] = {}
         self.prev_ema_values: Dict[str, float] = {}
+        self.day_open: Dict[str, float] = {"NIFTY": 0.0, "CRUDEOIL": 0.0}
         self.regimes: Dict[str, StructureRegime] = {
             "NIFTY": StructureRegime.SIDEWAYS,
             "CRUDEOIL": StructureRegime.SIDEWAYS
@@ -40,13 +41,22 @@ class MarketStructureEngine:
         self.swing_highs: Dict[str, List[float]] = {"NIFTY": [], "CRUDEOIL": []}
         self.swing_lows: Dict[str, List[float]] = {"NIFTY": [], "CRUDEOIL": []}
 
+    def set_day_open(self, asset_key: str, open_price: float) -> None:
+        """Register the opening price of the current trading day."""
+        if open_price > 0:
+            self.day_open[asset_key] = float(open_price)
+
     def update_bar(self, bar: Dict[str, Any]) -> StructureRegime:
         """
         Ingest a completed 1-minute candle bar and update market structure.
         Bar dictionary must contain: "symbol", "close", "high", "low", "volume".
+        Optional: "day_open".
         """
         raw_sym = bar.get("symbol", "NIFTY").upper()
         asset_key = "CRUDEOIL" if "CRUDE" in raw_sym else "NIFTY"
+
+        if "day_open" in bar and float(bar["day_open"]) > 0:
+            self.set_day_open(asset_key, float(bar["day_open"]))
 
         close = float(bar.get("close", 0.0))
         high = float(bar.get("high", close))
@@ -121,24 +131,68 @@ class MarketStructureEngine:
 
         return regime
 
-    def validate_setup_alignment(self, setup_direction: str, asset_key: str = "NIFTY") -> Tuple[bool, str]:
+    def get_macro_bias(self, asset_key: str = "NIFTY", current_price: Optional[float] = None) -> str:
+        """Evaluate macro session bias relative to Day's Open."""
+        day_open = self.day_open.get(asset_key, 0.0)
+        px = current_price or (self.bars[asset_key][-1]["close"] if self.bars[asset_key] else 0.0)
+        if day_open <= 0 or px <= 0:
+            return "NEUTRAL"
+
+        threshold = 25.0 if asset_key == "NIFTY" else 35.0
+        if px < (day_open - threshold):
+            return "BEARISH"
+        elif px > (day_open + threshold):
+            return "BULLISH"
+        return "NEUTRAL"
+
+    def validate_setup_alignment(
+        self,
+        setup_direction: str,
+        asset_key: str = "NIFTY",
+        current_price: Optional[float] = None,
+        is_bounce: bool = False
+    ) -> Tuple[bool, str]:
         """
-        Enforce strict market structure alignment.
+        Enforce strict market structure and macro trend alignment.
         - setup_direction: "BULLISH" (Calls / Long) or "BEARISH" (Puts / Short).
+        - is_bounce: True for Support Bounces / Resistance Rejections.
         Returns (is_allowed, reason).
         """
         regime = self.regimes.get(asset_key, StructureRegime.SIDEWAYS)
         ema = self.ema_values.get(asset_key, 0.0)
+        day_open = self.day_open.get(asset_key, 0.0)
+        px = current_price or (self.bars[asset_key][-1]["close"] if self.bars[asset_key] else 0.0)
+        macro_bias = self.get_macro_bias(asset_key, px)
 
         if setup_direction == "BULLISH":
             if regime == StructureRegime.BEARISH:
                 return False, f"Market Structure is BEARISH (Price below EMA-20 ₹{ema:.1f}). Suppressing counter-trend Call/Long."
-            return True, f"Structure is {regime.value} - Bullish alignment confirmed."
+
+            if is_bounce:
+                if macro_bias == "BEARISH":
+                    if px < ema:
+                        return False, f"Macro Session Bias is BEARISH (Price ₹{px:.1f} is {day_open - px:.1f}pts below Day Open ₹{day_open:.1f} & below EMA-20 ₹{ema:.1f}). Suppressing counter-trend Support Bounce."
+                    if regime != StructureRegime.BULLISH:
+                        return False, f"Macro Session Bias is BEARISH. Support Bounce requires confirmed BULLISH structure (got {regime.value})."
+                elif px < (ema - 2.0) and ema > 0:
+                    return False, f"Price ₹{px:.1f} is below dynamic EMA-20 ₹{ema:.1f}. Support bounce must sustain above EMA."
+
+            return True, f"Structure is {regime.value} (Macro: {macro_bias}) - Bullish alignment confirmed."
 
         elif setup_direction == "BEARISH":
             if regime == StructureRegime.BULLISH:
                 return False, f"Market Structure is BULLISH (Price above EMA-20 ₹{ema:.1f}). Suppressing counter-trend Put/Short."
-            return True, f"Structure is {regime.value} - Bearish alignment confirmed."
+
+            if is_bounce:
+                if macro_bias == "BULLISH":
+                    if px > ema:
+                        return False, f"Macro Session Bias is BULLISH (Price ₹{px:.1f} is {px - day_open:.1f}pts above Day Open ₹{day_open:.1f} & above EMA-20 ₹{ema:.1f}). Suppressing counter-trend Resistance Short."
+                    if regime != StructureRegime.BEARISH:
+                        return False, f"Macro Session Bias is BULLISH. Resistance Rejection requires confirmed BEARISH structure (got {regime.value})."
+                elif px > (ema + 2.0) and ema > 0:
+                    return False, f"Price ₹{px:.1f} is above dynamic EMA-20 ₹{ema:.1f}. Resistance rejection must stay below EMA."
+
+            return True, f"Structure is {regime.value} (Macro: {macro_bias}) - Bearish alignment confirmed."
 
         return True, "Structure is Neutral/Sideways."
 
@@ -147,6 +201,8 @@ class MarketStructureEngine:
         return {
             "asset": asset_key,
             "regime": self.regimes.get(asset_key, StructureRegime.SIDEWAYS).value,
+            "macro_bias": self.get_macro_bias(asset_key),
+            "day_open": self.day_open.get(asset_key, 0.0),
             "ema_20": self.ema_values.get(asset_key, 0.0),
             "prev_ema_20": self.prev_ema_values.get(asset_key, 0.0),
             "ema_slope": round(self.ema_values.get(asset_key, 0.0) - self.prev_ema_values.get(asset_key, 0.0), 2),

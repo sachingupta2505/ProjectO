@@ -276,7 +276,8 @@ class TradingBotRunner:
                         "high": n_high,
                         "low": n_low,
                         "close": n_close,
-                        "volume": nifty_vol
+                        "volume": nifty_vol,
+                        "day_open": float(nifty_info.get("open", nifty_spot))
                     })
                     # Reset Nifty accumulator
                     self._nifty_bar_open = nifty_spot
@@ -295,7 +296,8 @@ class TradingBotRunner:
                         "high": c_high,
                         "low": c_low,
                         "close": c_close,
-                        "volume": crude_vol
+                        "volume": crude_vol,
+                        "day_open": float(crude_info.get("open", crude_spot))
                     })
                     # Reset Crude accumulator
                     self._crude_bar_open = crude_spot

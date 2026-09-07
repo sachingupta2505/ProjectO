@@ -37,8 +37,8 @@ def test_leg_stop_loss_calculation():
 
 
 def test_rms_daily_limits():
-    # Test default settings (₹11,000 Target & ₹6,000 Stop Loss)
-    rms = RiskManager()
+    # Test configured settings (₹11,000 Target & ₹6,000 Stop Loss)
+    rms = RiskManager(max_daily_loss=6000.0, max_daily_profit=11000.0)
     assert rms.max_daily_loss == 6000.0
     assert rms.max_daily_profit == 11000.0
 

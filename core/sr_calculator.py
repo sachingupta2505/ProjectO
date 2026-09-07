@@ -12,22 +12,95 @@ from core.logger import get_logger
 logger = get_logger("SRCalculator")
 
 
+def fetch_angel_multi_timeframe_ohlc(asset_key: str) -> Optional[Dict[str, Dict[str, float]]]:
+    """
+    Fetches genuine completed Daily, Weekly, and Monthly OHLC from Angel One SmartAPI.
+    Eliminates all international/currency synthetic gaps by using exchange-native MCX/NSE candles.
+    """
+    try:
+        from login import login
+        from datetime import datetime, timedelta
+        api = login()
+        is_nifty = "NIFTY" in asset_key.upper()
+        exchange = "NSE" if is_nifty else "MCX"
+        token = "99926000" if is_nifty else "565900"
+
+        now = datetime.now()
+        from_d = (now - timedelta(days=90)).strftime("%Y-%m-%d 09:00")
+        to_d = now.strftime("%Y-%m-%d 23:30")
+
+        resp = api.getCandleData({
+            "exchange": exchange,
+            "symboltoken": token,
+            "interval": "ONE_DAY",
+            "fromdate": from_d,
+            "todate": to_d
+        })
+        candles = resp.get("data", [])
+        if not candles or len(candles) < 2:
+            return None
+
+        last_date_str = candles[-1][0][:10]
+        today_str = now.strftime("%Y-%m-%d")
+        comp_daily = candles[-2] if last_date_str == today_str and len(candles) >= 2 else candles[-1]
+
+        res = {
+            "daily": {
+                "high": round(float(comp_daily[2]), 2),
+                "low": round(float(comp_daily[3]), 2),
+                "close": round(float(comp_daily[4]), 2)
+            }
+        }
+
+        # Weekly: previous completed 5 trading days
+        hist = candles[:-1] if last_date_str == today_str else candles
+        if len(hist) >= 5:
+            last_week = hist[-5:]
+            res["weekly"] = {
+                "high": round(max(float(c[2]) for c in last_week), 2),
+                "low": round(min(float(c[3]) for c in last_week), 2),
+                "close": round(float(last_week[-1][4]), 2)
+            }
+
+        # Monthly: previous completed ~20 trading days
+        if len(hist) >= 20:
+            last_month = hist[-20:]
+            res["monthly"] = {
+                "high": round(max(float(c[2]) for c in last_month), 2),
+                "low": round(min(float(c[3]) for c in last_month), 2),
+                "close": round(float(last_month[-1][4]), 2)
+            }
+
+        logger.info(f"✅ Fetched genuine Angel One {exchange} candles for {asset_key}: Daily {res.get('daily')}")
+        return res
+    except Exception as e:
+        logger.debug(f"Angel One MTF fetch failed for {asset_key}: {e}")
+        return None
+
+
 def fetch_multi_timeframe_ohlc(asset_key: str) -> Dict[str, Dict[str, float]]:
     """
-    Fetches real-time Daily, Weekly, and Monthly OHLC candles from Yahoo Finance.
-    - Daily: Yesterday's completed candle
-    - Weekly: Previous completed week's candle
-    - Monthly: Previous completed month's candle
+    Fetches real-time Daily, Weekly, and Monthly OHLC candles.
+    Priority 1: Pure exchange candles from Angel One SmartAPI (MCX/NSE)
+    Priority 2: Fallback to Yahoo Finance
     """
+    # 1. Primary: Angel One direct exchange feed
+    angel_data = fetch_angel_multi_timeframe_ohlc(asset_key)
+    if angel_data and "daily" in angel_data and "weekly" in angel_data and "monthly" in angel_data:
+        return angel_data
+
+    # 2. Secondary fallback: Yahoo Finance
     s = requests.Session()
     s.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
     is_nifty = "NIFTY" in asset_key.upper()
     sym = "%5ENSEI" if is_nifty else "CL=F"
     fx = 94.5 if not is_nifty else 1.0
 
-    res = {}
+    res = angel_data or {}
     intervals = [("daily", "1d", "5d"), ("weekly", "1wk", "1mo"), ("monthly", "1mo", "6mo")]
     for tf, itv, rng in intervals:
+        if tf in res:
+            continue
         try:
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval={itv}&range={rng}"
             r = s.get(url, timeout=4)
@@ -45,11 +118,11 @@ def fetch_multi_timeframe_ohlc(asset_key: str) -> Dict[str, Dict[str, float]]:
 
     # Fallbacks if network unavailable
     if not res.get("daily"):
-        res["daily"] = {"high": 24005.75 if is_nifty else 8710.0, "low": 23895.85 if is_nifty else 8384.0, "close": 23897.7 if is_nifty else 8645.0}
+        res["daily"] = {"high": 24005.75 if is_nifty else 8697.0, "low": 23895.85 if is_nifty else 8374.0, "close": 23897.7 if is_nifty else 8576.0}
     if not res.get("weekly"):
-        res["weekly"] = {"high": 24143.15 if is_nifty else 8801.7, "low": 23786.8 if is_nifty else 7948.4, "close": 23897.7 if is_nifty else 8645.0}
+        res["weekly"] = {"high": 24143.15 if is_nifty else 8788.0, "low": 23786.8 if is_nifty else 8030.0, "close": 23897.7 if is_nifty else 8576.0}
     if not res.get("monthly"):
-        res["monthly"] = {"high": 24143.15 if is_nifty else 8801.7, "low": 23786.8 if is_nifty else 8139.3, "close": 23897.7 if is_nifty else 8645.0}
+        res["monthly"] = {"high": 24143.15 if is_nifty else 8788.0, "low": 23786.8 if is_nifty else 8030.0, "close": 23897.7 if is_nifty else 8576.0}
 
     return res
 

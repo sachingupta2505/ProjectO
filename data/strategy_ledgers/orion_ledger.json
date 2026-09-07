@@ -1,0 +1,28 @@
+[
+  {
+    "trade_id": "ORION_1788800242",
+    "strategy": "ORION-15",
+    "index": "NIFTY",
+    "date": "2026-09-08",
+    "side": "CALL",
+    "opening_body_pts": 50.0,
+    "retest_zone": "24000.0 - 24025.0",
+    "invalidation_sl": 23985.0,
+    "target1": 24055.0,
+    "target2": 24095.0,
+    "entry_time": "09:40:00",
+    "entry_spot": 24025.0,
+    "entry_premium": 100.0,
+    "exit_time": "10:30:00",
+    "exit_spot": 24096.0,
+    "exit_premium": 146.15,
+    "reason": "TARGET 2 (Take Profit)",
+    "breakeven_triggered": true,
+    "quantity": 65,
+    "net_pnl": 2999.75,
+    "duration_mins": 50.0,
+    "mode": "PAPER",
+    "notes": "Paper trial. Closed via TARGET 2 (Take Profit).",
+    "recorded_at": "2026-09-07T22:27:22.462629"
+  }
+]

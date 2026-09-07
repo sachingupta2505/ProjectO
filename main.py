@@ -67,6 +67,11 @@ class TradingBotRunner:
         self._crude_bar_open: Optional[float] = None
         self._crude_bar_high: float = -1e9
         self._crude_bar_low: float = 1e9
+        # 5-minute candle aggregation state for ORION Opening Retest
+        self._5m_bar_open: Optional[float] = None
+        self._5m_bar_high: float = -1e9
+        self._5m_bar_low: float = 1e9
+        self._last_5m_bar_minute: int = -1
 
         # Initialize Telegram Bridge for mobile phone interaction
         self.telegram = TelegramBridge(
@@ -86,12 +91,7 @@ class TradingBotRunner:
             self.broker = PaperBroker(
                 initial_capital=settings.PAPER_INITIAL_CAPITAL,
                 slippage_pct=settings.SLIPPAGE_PCT,
-                brokerage_per_order=settings.BROKERAGE_PER_ORDER,
-                exchange_txn_tax_pct=settings.EXCHANGE_TXN_TAX_PCT,
-                stt_ctt_pct=settings.STT_CTT_PCT,
-                sebi_turnover_pct=settings.SEBI_TURNOVER_PCT,
-                stamp_duty_pct=settings.STAMP_DUTY_PCT,
-                gst_pct=settings.GST_PCT
+                persist=True
             )
         elif self.broker_type == "angel":
             self.broker = AngelOneBroker()
@@ -331,6 +331,46 @@ class TradingBotRunner:
                     self._crude_bar_open = crude_spot
                     self._crude_bar_high = crude_spot
                     self._crude_bar_low = crude_spot
+
+        elif isinstance(self.strategy, OpeningRetestStrategy):
+            # 1. Update spot tick to monitor active SL, Target 1 Breakeven, Target 2
+            self.strategy.on_tick(Tick(
+                token=99926000,
+                symbol=self.strategy.symbol,
+                ltp=nifty_spot,
+                timestamp=now
+            ))
+
+            # 2. Accumulate real 5-minute candle
+            if self._5m_bar_open is None:
+                self._5m_bar_open = nifty_spot
+            self._5m_bar_high = max(self._5m_bar_high, nifty_spot)
+            self._5m_bar_low = min(self._5m_bar_low, nifty_spot)
+
+            curr_min = now.minute
+            # Close 5m bar at minutes 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55
+            if (curr_min % 5 == 0) and (curr_min != self._last_5m_bar_minute) and (now.second >= 1):
+                self._last_5m_bar_minute = curr_min
+                n_open = self._5m_bar_open or nifty_spot
+                n_close = nifty_spot
+                n_high = max(self._5m_bar_high, n_open, n_close)
+                n_low = min(self._5m_bar_low, n_open, n_close)
+                vol = float(nifty_info.get("volume", 50000)) if nifty_info else 50000
+
+                bar_5m = {
+                    "timestamp": now,
+                    "open": n_open,
+                    "high": n_high,
+                    "low": n_low,
+                    "close": n_close,
+                    "volume": vol
+                }
+                self.strategy.on_bar(bar_5m)
+
+                # Reset accumulator
+                self._5m_bar_open = nifty_spot
+                self._5m_bar_high = nifty_spot
+                self._5m_bar_low = nifty_spot
 
         # 4. Check Strategy Exits & Multi-Session Square-Off
         self.strategy.check_exit_conditions(now)

@@ -43,7 +43,7 @@ class OpeningRetestStrategy(BaseStrategy):
         retest_leeway: float = 5.0,
         telegram: Optional[TelegramBridge] = None
     ):
-        super().__init__(f"Opening 15m Retest ({symbol})", broker, risk_manager)
+        super().__init__(f"ORION-15 ({symbol})", broker, risk_manager)
         self.symbol = symbol.upper()
         self.lots = lots
         self.min_body_points = min_body_points
@@ -417,6 +417,38 @@ class OpeningRetestStrategy(BaseStrategy):
         net_pnl = (opt_exit_price - self.entry_opt_price) * self.trade_order.quantity
         self.daily_pnl += net_pnl
         self.risk_manager.evaluate_daily_pnl(self.daily_pnl)
+
+        # Record trade into ORION Strategy Ledger
+        try:
+            dur_mins = round((current_dt - self.trade_order.placed_at).total_seconds() / 60.0, 1) if hasattr(self.trade_order, "placed_at") else 0.0
+            from core.strategy_ledger import strategy_ledger
+            strategy_ledger.record_trade("orion", {
+                "trade_id": f"ORION_{int(time.time())}",
+                "strategy": "ORION-15",
+                "index": self.symbol,
+                "date": current_dt.strftime("%Y-%m-%d"),
+                "side": self.setup_side,
+                "opening_body_pts": round(self.body_15m, 1),
+                "retest_zone": f"{self.retest_min:.1f} - {self.retest_max:.1f}",
+                "invalidation_sl": round(self.invalidation_spot, 1),
+                "target1": round(self.target1_spot, 1),
+                "target2": round(self.target2_spot, 1),
+                "entry_time": self.trade_order.placed_at.strftime("%H:%M:%S") if hasattr(self.trade_order, "placed_at") else "",
+                "entry_spot": round(self.entry_spot, 1),
+                "entry_premium": round(self.entry_opt_price, 2),
+                "exit_time": current_dt.strftime("%H:%M:%S"),
+                "exit_spot": round(exit_spot, 1),
+                "exit_premium": round(opt_exit_price, 2),
+                "reason": reason,
+                "breakeven_triggered": self.breakeven_ratchet_done,
+                "quantity": self.trade_order.quantity,
+                "net_pnl": round(net_pnl, 2),
+                "duration_mins": dur_mins,
+                "mode": "PAPER",
+                "notes": f"Paper trial. Closed via {reason}."
+            })
+        except Exception as e:
+            logger.warning(f"Failed to record trade to strategy ledger: {e}")
 
         logger.info(f"🏁 [TRADE CLOSED: {reason}] PnL: ₹{net_pnl:+,.2f} (Entry: ₹{self.entry_opt_price:.2f} -> Exit: ₹{opt_exit_price:.2f})")
 

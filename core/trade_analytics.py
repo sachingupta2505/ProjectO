@@ -263,10 +263,25 @@ class DailyDebriefGenerator:
     """Generates an end-of-day learning debrief comparing what worked vs what failed."""
 
     @staticmethod
-    def generate_debrief(ledger: Optional[TradeLearningLedger] = None, target_date: Optional[str] = None) -> Dict[str, Any]:
+    def generate_debrief(
+        ledger: Optional[TradeLearningLedger] = None,
+        target_date: Optional[str] = None,
+        broker_trades: Optional[List[Dict[str, Any]]] = None,
+        broker_margins: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         l = ledger or TradeLearningLedger()
         date_str = target_date or datetime.now().strftime("%Y-%m-%d")
         trades = l.get_trades_for_date(date_str)
+
+        # Reconciliation against broker tradebook:
+        # If broker trades are supplied, filter out any unverified or mock records
+        if broker_trades is not None:
+            valid_symbols = {t.get("symbol") for t in broker_trades if t.get("symbol")}
+            valid_order_ids = {t.get("order_id") for t in broker_trades if t.get("order_id")}
+            trades = [
+                t for t in trades
+                if t.symbol in valid_symbols or any(oid in t.trade_id for oid in valid_order_ids if oid)
+            ]
 
         total_trades = len(trades)
         if total_trades == 0:
@@ -283,6 +298,15 @@ class DailyDebriefGenerator:
         gross_pnl = sum(t.gross_pnl for t in trades)
         charges = sum(t.charges for t in trades)
         net_pnl = sum(t.net_pnl for t in trades)
+
+        # Reconcile P&L against official broker margins if provided
+        if broker_margins:
+            if "daily_realized_pnl" in broker_margins and broker_margins["daily_realized_pnl"] != 0:
+                gross_pnl = broker_margins["daily_realized_pnl"]
+            if "daily_charges" in broker_margins and broker_margins["daily_charges"] != 0:
+                charges = broker_margins["daily_charges"]
+            net_pnl = round(gross_pnl - charges, 2)
+
         win_rate = (len(wins) / total_trades * 100.0) if total_trades > 0 else 0.0
 
         # Best / Worst hour analysis

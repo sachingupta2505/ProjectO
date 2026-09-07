@@ -236,6 +236,28 @@ class AngelOneBroker(BaseBroker):
             logger.error(f"Error fetching Angel One orders: {e}")
         return orders_list
 
+    def get_trades(self) -> List[dict]:
+        trades_list = []
+        try:
+            res = self.smart_api.tradeBook()
+            if res and res.get("status") and res.get("data"):
+                for t in res["data"]:
+                    trades_list.append({
+                        "trade_id": str(t.get("tradeid", "")),
+                        "order_id": str(t.get("orderid", "")),
+                        "symbol": t.get("tradingsymbol", ""),
+                        "exchange": t.get("exchange", "NFO"),
+                        "side": t.get("transactiontype", "BUY"),
+                        "quantity": int(t.get("fillshares", 0)),
+                        "price": float(t.get("fillprice", 0.0)),
+                        "charges": 0.0,
+                        "timestamp": t.get("filltime", ""),
+                        "tag": ""
+                    })
+        except Exception as e:
+            logger.error(f"Error fetching Angel One trades: {e}")
+        return trades_list
+
     def get_margins(self) -> dict:
         try:
             if hasattr(self.smart_api, "rmsLimit"):

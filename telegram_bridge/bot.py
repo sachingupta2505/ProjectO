@@ -411,6 +411,10 @@ class TelegramBridge:
         if any(w in lower for w in ["status", "how is it going", "active", "chal raha", "bot status", "health"]):
             return self._cmd_status()
 
+        # 5b. Executed Trade Book / Orders
+        if any(w in lower for w in ["tradebook", "trade book", "fills", "executed trade", "order book", "orderbook", "trades today", "aj ke trade"]):
+            return self._cmd_tradebook()
+
         # 6. Positions / Open trades queries
         if any(w in lower for w in ["position", "trade", "open trade", "legs", "ce", "pe", "holding", "orders"]):
             return self._cmd_positions()
@@ -530,6 +534,8 @@ class TelegramBridge:
             return self._cmd_pnl()
         elif cmd in ("/positions", "/pos"):
             return self._cmd_positions()
+        elif cmd in ("/tradebook", "/trades", "/fills", "/orderbook", "/orders"):
+            return self._cmd_tradebook()
         elif cmd in ("/squareoff", "/exit", "/closeall"):
             return self._cmd_squareoff()
         elif cmd == "/setlots":
@@ -570,6 +576,7 @@ class TelegramBridge:
             "• /status — Engine, broker & strategy status\n"
             "• /pnl — Net PnL, Gross PnL, Charges & cash balance\n"
             "• /positions — Active open positions & trades\n"
+            "• /tradebook — Executed fills, timestamps, prices & fees\n"
             "• /dashboard — Web UI link\n"
             "• /angel — Angel One connection details\n\n"
             "⚙️ <b>Trade Control:</b>\n"
@@ -695,6 +702,49 @@ class TelegramBridge:
                     f"• <b>{p.instrument.symbol}</b>: {pnl_icon} <b>₹{p.realized_pnl:+,.2f}</b> (Net: 0 Qty)"
                 )
 
+        return "\n".join(lines)
+
+    def _cmd_tradebook(self) -> str:
+        """Display the official broker tradebook of executed fills for the session."""
+        broker_obj = self._get_active_broker()
+        if not broker_obj:
+            return "⚠️ Broker not available."
+
+        trades = broker_obj.get_trades() if hasattr(broker_obj, "get_trades") else []
+        is_paper = settings.PAPER_TRADING or (self.runner and self.runner.is_paper)
+        source_tag = "Paper Trading" if is_paper else "Live Broker (Angel One)"
+
+        if not trades:
+            return f"📖 <b>Official Trade Book ({source_tag})</b>\n\nNo trade fills executed in this session."
+
+        lines = [f"📖 <b>Official Executed Trade Book ({source_tag})</b>\n"]
+        for i, t in enumerate(trades, 1):
+            ts = t.get("timestamp", "")
+            time_str = ts.split("T")[1][:8] if "T" in ts else ts
+            side = t.get("side", "BUY")
+            side_icon = "🟢" if side == "BUY" else "🔴"
+            sym = t.get("symbol", "")
+            qty = t.get("quantity", 0)
+            price = t.get("price", 0.0)
+            charges = t.get("charges", 0.0)
+            tag = t.get("tag", "")
+
+            lines.append(
+                f"{side_icon} <b>#{i} {side} {qty}x {sym}</b> @ ₹{price:,.2f}\n"
+                f"   ⏰ Time: {time_str} | Charges: ₹{charges:.2f}\n"
+                f"   🏷️ Tag: <code>{tag or 'MANUAL'}</code>\n"
+            )
+
+        margins = broker_obj.get_margins() if broker_obj else {}
+        realized = margins.get("daily_realized_pnl", margins.get("realized_pnl", 0.0))
+        charges_tot = margins.get("daily_charges", margins.get("total_charges", 0.0))
+        net = margins.get("daily_pnl", round(realized - charges_tot, 2))
+        pnl_icon = "🟢" if net >= 0 else "🔴"
+
+        lines.append(f"📊 <b>Summary:</b> {len(trades)} execution(s)")
+        lines.append(f"• Gross Realized: ₹{realized:+,.2f}")
+        lines.append(f"• Total Charges: -₹{charges_tot:,.2f}")
+        lines.append(f"• {pnl_icon} <b>Net Realized PnL:</b> <b>₹{net:+,.2f}</b>")
         return "\n".join(lines)
 
     def _cmd_squareoff(self) -> str:

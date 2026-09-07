@@ -32,7 +32,32 @@ logger = get_logger("EODReview")
 def run_eod_review(target_date: str = None, send_telegram: bool = True) -> Dict[str, Any]:
     date_str = target_date or datetime.now().strftime("%Y-%m-%d")
     ledger = TradeLearningLedger()
-    debrief = DailyDebriefGenerator.generate_debrief(ledger, target_date=date_str)
+
+    # Reconcile against broker tradebook and margins to ensure 100% sync
+    broker_trades = None
+    broker_margins = None
+    try:
+        if not settings.PAPER_TRADING and settings.BROKER == "angel":
+            from brokers.angel_broker import AngelOneBroker
+            broker = AngelOneBroker()
+            if broker.authenticate():
+                broker_trades = broker.get_trades()
+                broker_margins = broker.get_margins()
+        else:
+            from brokers.paper_broker import PaperBroker
+            broker = PaperBroker(initial_capital=settings.PAPER_INITIAL_CAPITAL, persist=True)
+            if broker.authenticate():
+                broker_trades = broker.get_trades()
+                broker_margins = broker.get_margins()
+    except Exception as e:
+        logger.warning(f"Could not load broker for reconciliation: {e}")
+
+    debrief = DailyDebriefGenerator.generate_debrief(
+        ledger,
+        target_date=date_str,
+        broker_trades=broker_trades,
+        broker_margins=broker_margins
+    )
 
     # 1. Self-Tuning Recommendations
     optimizer = AdaptiveExecutionOptimizer(ledger)

@@ -50,6 +50,11 @@ class BaseBroker(ABC):
         pass
 
     @abstractmethod
+    def get_trades(self) -> List[dict]:
+        """Fetch all executed trades in the current session."""
+        pass
+
+    @abstractmethod
     def get_margins(self) -> dict:
         """Fetch available margin and account balance details."""
         pass

@@ -1127,6 +1127,22 @@ class TelegramBridge:
                 title = "🎯 <b>NIFTY 50 Support & Resistance Levels</b>\n"
                 pts_label = "pts"
 
+            tf_filter = None
+            if any("WEEK" in a.upper() for a in (args or [])):
+                tf_filter = "W"
+            elif any("MONTH" in a.upper() for a in (args or [])):
+                tf_filter = "M"
+            elif any("DAY" in a.upper() or "DAILY" in a.upper() for a in (args or [])):
+                tf_filter = "D"
+
+            if tf_filter:
+                lvls = [
+                    l for l in lvls
+                    if (tf_filter == "W" and ("week" in l.name.lower() or "weekly" in l.id))
+                    or (tf_filter == "M" and ("month" in l.name.lower() or "monthly" in l.id))
+                    or (tf_filter == "D" and ("daily" in l.name.lower() or "daily" in l.id or "pdh" in l.id or "pdl" in l.id))
+                ]
+
             supports = [l for l in lvls if l.is_active and l.price < spot]
             resistances = [l for l in lvls if l.is_active and l.price > spot]
 
@@ -1143,14 +1159,17 @@ class TelegramBridge:
             if nearest_sup:
                 lines.append(f"🟢 <b>Nearest Support:</b> ₹{nearest_sup.price:,.2f} (<b>-{spot - nearest_sup.price:.1f} {pts_label}</b> away)\n  ↳ <i>{nearest_sup.name}</i>\n")
 
-            lines.append("<code>LEVEL      | TYPE | ACTION  | DISTANCE</code>")
-            lines.append("<code>-------------------------------------</code>")
+            lines.append("<code>LEVEL      | TF | TYPE | DISTANCE</code>")
+            lines.append("<code>-----------------------------------</code>")
 
             for l in sorted(lvls, key=lambda x: x.price, reverse=True):
                 dist = l.price - spot
+                tf_tag = "M" if "month" in l.name.lower() or "monthly" in l.id else ("W" if "week" in l.name.lower() or "weekly" in l.id else "D")
                 tag = "RES" if "RES" in l.level_type or "SUPPLY" in l.level_type else "SUP"
-                act = l.action[:4]
-                lines.append(f"<code>{l.price:<10.1f} | {tag:<4} | {act:<7} | {dist:+8.1f}</code>")
+                lines.append(f"<code>{l.price:<10.1f} | {tf_tag:<2} | {tag:<4} | {dist:+8.1f}</code>")
+
+            tf_legend = "<i>[D]=Daily, [W]=Weekly, [M]=Monthly</i>\n"
+            lines.append(f"\n{tf_legend}")
 
             if not is_crude:
                 lines.append(

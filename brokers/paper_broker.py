@@ -21,8 +21,8 @@ logger = get_logger("PaperBroker")
 
 
 class PaperBroker(BaseBroker):
-    def __init__(self, initial_capital: float = 100000.0, slippage_pct: float = 0.002, persist: bool = False, account_name: str = "default"):
-        self.account_name = account_name
+    def __init__(self, initial_capital: float = 100000.0, slippage_pct: float = 0.002, persist: bool = False, account_name: str = "default", *args, **kwargs):
+        self.account_name = kwargs.get("account_name", account_name)
         self.initial_capital = initial_capital
         self.available_cash = initial_capital
         self.total_charges: float = 0.0

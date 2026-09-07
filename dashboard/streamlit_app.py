@@ -529,24 +529,24 @@ def render_dashboard():
             index=1
         )
         cap_val = 50000.0 if "50,000" in cap_option else (100000.0 if "1,00,000" in cap_option else (200000.0 if "2,00,000" in cap_option else 500000.0))
-        if st.button("🔄 Reset All 4 Accounts (₹" + f"{int(cap_val/1000)}k each)", use_container_width=True):
-            for name in ["orion", "cpr", "ict", "theta", "default"]:
+        if st.button("🔄 Reset Core Accounts (₹" + f"{int(cap_val/1000)}k each)", use_container_width=True):
+            for name in ["orion", "theta", "cpr", "ict", "default"]:
                 PaperBroker(account_name=name, persist=True).reset_account(cap_val)
             st.session_state.paper_broker.reset_account(cap_val)
-            st.success(f"✅ All 4 Strategy accounts reset to ₹{cap_val:,.2f} each (Total: ₹{cap_val*4:,.2f})!")
+            st.success(f"✅ Core Strategy accounts reset to ₹{cap_val:,.2f} each (Total: ₹{cap_val*2:,.2f})!")
             st.rerun()
 
         st.divider()
 
-        st.subheader("⚙️ Incubator Portfolio")
+        st.subheader("⚙️ Optimized Portfolio")
         strat_type = st.selectbox(
             "Selected Strategy View",
             [
-                "🌐 Multi-Strategy Portfolio (All 4)",
+                "🌟 Core Duo Portfolio (ORION-15 + THETA-0DTE)",
                 "🚀 ORION-15 (Opening Retest)",
-                "🏛️ CPR-Institutional (Pivot Engine)",
-                "⚡ ICT-Liquidity (Sweep & FVG)",
-                "⏳ THETA-0DTE (Expiry Scalp)"
+                "⏳ THETA-0DTE (Expiry Scalp)",
+                "🏛️ CPR-Institutional (Archive)",
+                "⚡ ICT-Liquidity (Archive)"
             ],
             index=0
         )
@@ -632,23 +632,22 @@ def render_dashboard():
         m4.metric("Available Cash", f"₹{avail_cash:,.2f}" if avail_cash > 0 else "SmartAPI Auth OK")
 
     else:
-        all_brokers = [
+        # Core Duo Brokers (ORION-15 + THETA-0DTE)
+        active_brokers = [
             PaperBroker(account_name="orion", persist=True),
-            PaperBroker(account_name="cpr", persist=True),
-            PaperBroker(account_name="ict", persist=True),
             PaperBroker(account_name="theta", persist=True)
         ]
-        tot_cap = sum(b.initial_capital for b in all_brokers)
-        tot_cash = sum(b.available_cash for b in all_brokers)
-        tot_pnl = sum(b.get_margins()["total_pnl"] for b in all_brokers)
-        tot_used = sum(b.get_margins().get("margin_used", 0.0) for b in all_brokers)
+        tot_cap = sum(b.initial_capital for b in active_brokers)
+        tot_cash = sum(b.available_cash for b in active_brokers)
+        tot_pnl = sum(b.get_margins()["total_pnl"] for b in active_brokers)
+        tot_used = sum(b.get_margins().get("margin_used", 0.0) for b in active_brokers)
         
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("💰 Incubator Capital", f"₹{tot_cap:,.2f}", "4 Accounts × ₹1L")
+        m1.metric("💰 Core Duo Capital", f"₹{tot_cap:,.2f}", "2 Accounts × ₹1L")
         m2.metric("💵 Available Funds", f"₹{tot_cash:,.2f}", f"₹{tot_used:,.2f} Used")
         m3.metric("📈 Today's Net Profit", f"₹{tot_pnl:+,.2f}", delta=f"{tot_pnl:+,.2f}", delta_color="normal")
-        m4.metric("🎯 Active Strategies", "4 Running Parallel", f"{lots} Lots Each (NIFTY)")
-        m5.metric("🤖 Multi-Bot Daemon", "🟢 All Armed", "Standby for 09:15 AM")
+        m4.metric("🎯 Active Strategies", "Core Duo (71.9% WR)", f"{lots} Lots (130 Qty)")
+        m5.metric("🤖 Bot Daemon", "🟢 Armed & Ready", "ORION-15 + THETA-0DTE")
 
     st.divider()
 

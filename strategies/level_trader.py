@@ -71,6 +71,7 @@ class LevelTraderStrategy(BaseStrategy):
         }
         self.trades_today_map: Dict[str, int] = {"NIFTY": 0, "CRUDEOIL": 0}
         self.last_trade_time_map: Dict[str, float] = {"NIFTY": 0.0, "CRUDEOIL": 0.0}
+        self.level_cooldown_map: Dict[str, float] = {}
 
         # Backwards compatibility state holders
         self._last_nifty_trade: Dict[str, Any] = {}
@@ -549,6 +550,10 @@ class LevelTraderStrategy(BaseStrategy):
         asset_levels = [lvl for lvl in self.levels if lvl.is_active and lvl.symbol.upper() == asset_key]
 
         for lvl in asset_levels:
+            # Check level cooldown (prevents re-entering a failed level for 15 mins)
+            if time.time() - self.level_cooldown_map.get(lvl.id, 0.0) < 900:
+                continue
+
             # Dynamic volume multiplier from learning engine
             eff_vol_mult = lvl.volume_multiplier
             if self.enable_adaptive_learning and self.optimizer:
@@ -599,11 +604,15 @@ class LevelTraderStrategy(BaseStrategy):
                 ref_low = lvl.range_low if lvl.range_low is not None else lvl.price
                 ref_high = lvl.range_high if lvl.range_high is not None else lvl.price
                 tolerance = 5.0 if asset_key == "NIFTY" else 15.0
+                min_body = 2.0 if asset_key == "NIFTY" else 6.0
+                min_wick = 3.0 if asset_key == "NIFTY" else 8.0
+
                 if curr_low <= (ref_high + tolerance) and curr_close > curr_open and curr_close >= ref_low:
                     lower_wick = min(curr_open, curr_close) - curr_low
-                    body = abs(curr_close - curr_open)
-                    if lower_wick >= (tolerance * 0.8) or lower_wick >= body * 0.4:
-                        reason = f"🟢 Support Bounce Confirmed: {lvl.name} (Low {curr_low:.2f} rejected, closed {curr_close:.2f})"
+                    body = curr_close - curr_open
+                    # Require confirmed bullish rejection candle with conviction and volume support
+                    if body >= min_body and lower_wick >= min_wick and (vol >= avg_volume * 0.7 if avg_volume > 0 else True):
+                        reason = f"🟢 Support Bounce Confirmed: {lvl.name} (Low {curr_low:.2f} rejected with {lower_wick:.1f}pt wick, closed {curr_close:.2f})"
                         self._execute_level_trade(OptionType.CE, lvl, reason, asset_key=asset_key)
                         return
 
@@ -614,11 +623,15 @@ class LevelTraderStrategy(BaseStrategy):
                 ref_low = lvl.range_low if lvl.range_low is not None else lvl.price
                 ref_high = lvl.range_high if lvl.range_high is not None else lvl.price
                 tolerance = 5.0 if asset_key == "NIFTY" else 15.0
+                min_body = 2.0 if asset_key == "NIFTY" else 6.0
+                min_wick = 3.0 if asset_key == "NIFTY" else 8.0
+
                 if curr_high >= (ref_low - tolerance) and curr_close < curr_open and curr_close <= ref_high:
                     upper_wick = curr_high - max(curr_open, curr_close)
-                    body = abs(curr_close - curr_open)
-                    if upper_wick >= (tolerance * 0.8) or upper_wick >= body * 0.4:
-                        reason = f"🔴 Resistance Rejection Confirmed: {lvl.name} (High {curr_high:.2f} rejected, closed {curr_close:.2f})"
+                    body = curr_open - curr_close
+                    # Require confirmed bearish rejection candle with conviction and volume support
+                    if body >= min_body and upper_wick >= min_wick and (vol >= avg_volume * 0.7 if avg_volume > 0 else True):
+                        reason = f"🔴 Resistance Rejection Confirmed: {lvl.name} (High {curr_high:.2f} rejected with {upper_wick:.1f}pt wick, closed {curr_close:.2f})"
                         self._execute_level_trade(OptionType.PE, lvl, reason, asset_key=asset_key)
                         return
 
@@ -871,6 +884,9 @@ class LevelTraderStrategy(BaseStrategy):
 
         lvl_obj = trade.get("level")
         lvl_name = getattr(lvl_obj, "name", "QuickTrigger/Manual")
+        if lvl_obj and hasattr(lvl_obj, "id") and "STOP LOSS" in reason.upper():
+            self.level_cooldown_map[lvl_obj.id] = time.time()
+            logger.info(f"⏳ Level '{lvl_name}' placed on 15-min cooldown after stop loss.")
 
         telemetry = TradeTelemetry(
             trade_id=exit_order.order_id,

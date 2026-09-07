@@ -265,3 +265,85 @@ def test_breakeven_lock_and_trailing_stop(strategy):
     assert strategy.active_instrument is None  # Trade successfully exited in locked profit!
 
 
+def test_sideways_regime_breakout_suppressed():
+    """Verify that choppy/sideways market structure suppresses directional breakout traps."""
+    broker = PaperBroker(initial_capital=500000.0)
+    rms = RiskManager(enforce_market_hours=False)
+
+    level = TradingLevel(
+        id="nifty_res_24000",
+        name="24000 Resistance",
+        price=24000.0,
+        level_type=LevelType.RESISTANCE.value,
+        action=LevelAction.BREAKOUT_ONLY.value,
+        symbol="NIFTY",
+        volume_multiplier=1.0
+    )
+
+    strat = LevelTraderStrategy(
+        broker=broker,
+        risk_manager=rms,
+        levels=[level],
+        lots=1,
+        enable_adaptive_learning=False
+    )
+    strat.initialize()
+
+    # Feed 6 bars of flat chop around 24000 (regime remains SIDEWAYS)
+    for px in [23999, 24000, 23999, 24000, 23999, 24000]:
+        strat.on_bar({"symbol": "NIFTY", "open": px, "high": px + 2, "low": px - 2, "close": px, "volume": 10000})
+
+    # Breakout candle crossing 24000 while market structure remains SIDEWAYS
+    breakout_bar = {"symbol": "NIFTY", "open": 23999, "high": 24004, "low": 23998, "close": 24002, "volume": 25000}
+    strat.on_bar(breakout_bar)
+
+    # Breakout must be blocked by sideways guard
+    assert "NIFTY" not in strat.active_trades
+
+
+def test_crude_structural_sl_bounds():
+    """Verify Crude Oil Stop Loss is structural (35 to 50 pts) and Target is 70+ pts."""
+    broker = PaperBroker(initial_capital=500000.0)
+    rms = RiskManager(enforce_market_hours=False)
+
+    level = TradingLevel(
+        id="crude_res_8700",
+        name="Crude 8700 Resistance",
+        price=8700.0,
+        range_low=8695.0,
+        range_high=8705.0,
+        level_type=LevelType.RESISTANCE.value,
+        action=LevelAction.BOTH.value,
+        symbol="CRUDEOIL",
+        volume_multiplier=1.0
+    )
+
+    strat = LevelTraderStrategy(
+        broker=broker,
+        risk_manager=rms,
+        levels=[level],
+        lots=1,
+        enable_adaptive_learning=False
+    )
+    strat.initialize()
+
+    # Feed 6 upward bars to establish genuine BULLISH regime
+    for i in range(6):
+        px = 8670 + (i * 5)
+        strat.on_bar({"symbol": "CRUDEOIL", "open": px - 2, "high": px + 4, "low": px - 3, "close": px, "volume": 10000})
+
+    # Confirmed breakout above 8705
+    breakout_bar = {"symbol": "CRUDEOIL", "open": 8700, "high": 8718, "low": 8698, "close": 8714, "volume": 25000}
+    strat.on_bar(breakout_bar)
+
+    assert "CRUDEOIL" in strat.active_trades
+    trade = strat.active_trades["CRUDEOIL"]
+
+    # SL must be between 35 and 50 points
+    sl_distance = abs(trade["entry_price"] - trade["sl_price"])
+    assert 35.0 <= sl_distance <= 50.0
+    # Target must be at least 70 points
+    assert trade["target_distance"] >= 70.0
+
+
+

@@ -526,6 +526,11 @@ class LevelTraderStrategy(BaseStrategy):
         # Filter levels matching this asset
         asset_levels = [lvl for lvl in self.levels if lvl.is_active and lvl.symbol.upper() == asset_key]
 
+        # Rolling 5-minute candle structure for institutional confirmation
+        has_5m = len(history) >= 5
+        c_5m_open = float(history[-5]["open"]) if has_5m else curr_open
+        c_5m_close = curr_close
+
         for lvl in asset_levels:
             # Check level cooldown (prevents re-entering a failed level for 15 mins)
             if time.time() - self.level_cooldown_map.get(lvl.id, 0.0) < 900:
@@ -542,10 +547,21 @@ class LevelTraderStrategy(BaseStrategy):
             if lvl.action in (LevelAction.BREAKOUT_ONLY.value, LevelAction.BOTH.value):
                 ref_price = lvl.range_high if lvl.range_high is not None else lvl.price
                 if prev_close < ref_price and curr_close > ref_price:
-                    # Enforce Market Structure Alignment (no breakout against downtrend)
+                    # Enforce Market Structure Alignment (no breakout against downtrend or during sideways chop)
                     allowed, s_reason = self.market_structure.validate_setup_alignment("BULLISH", asset_key, current_price=curr_close, is_bounce=False)
                     if not allowed:
                         logger.info(f"🏛️ [STRUCTURE GUARD] Breakout blocked on {lvl.name}: {s_reason}")
+                        continue
+
+                    # Over-extended wick filter: prevent buying the peak of a runaway wick
+                    max_chase_dist = 25.0 if asset_key == "CRUDEOIL" else 20.0
+                    if (curr_close - ref_price) > max_chase_dist:
+                        logger.info(f"⏳ [RETEST GUARD] Breakout on {lvl.name} over-extended ({curr_close:.1f} is {curr_close - ref_price:.1f}pts > {ref_price:.1f}). Waiting for pullback/retest.")
+                        continue
+
+                    # 5-minute institutional candle body confirmation
+                    if has_5m and (c_5m_close <= c_5m_open or c_5m_close <= ref_price):
+                        logger.info(f"⏳ [5M CANDLE FILTER] Breakout on {lvl.name} not confirmed by 5-min candle body (5m Open: {c_5m_open:.1f}, Close: {c_5m_close:.1f}).")
                         continue
 
                     # Technical Indicator Confluence Check (RSI, MACD, VWAP)
@@ -574,10 +590,21 @@ class LevelTraderStrategy(BaseStrategy):
             if lvl.action in (LevelAction.BREAKOUT_ONLY.value, LevelAction.BOTH.value):
                 ref_price = lvl.range_low if lvl.range_low is not None else lvl.price
                 if prev_close > ref_price and curr_close < ref_price:
-                    # Enforce Market Structure Alignment (no breakdown against uptrend)
+                    # Enforce Market Structure Alignment (no breakdown against uptrend or during sideways chop)
                     allowed, s_reason = self.market_structure.validate_setup_alignment("BEARISH", asset_key, current_price=curr_close, is_bounce=False)
                     if not allowed:
                         logger.info(f"🏛️ [STRUCTURE GUARD] Breakdown blocked on {lvl.name}: {s_reason}")
+                        continue
+
+                    # Over-extended wick filter: prevent shorting the bottom of a runaway wick
+                    max_chase_dist = 25.0 if asset_key == "CRUDEOIL" else 20.0
+                    if (ref_price - curr_close) > max_chase_dist:
+                        logger.info(f"⏳ [RETEST GUARD] Breakdown on {lvl.name} over-extended ({curr_close:.1f} is {ref_price - curr_close:.1f}pts < {ref_price:.1f}). Waiting for pullback/retest.")
+                        continue
+
+                    # 5-minute institutional candle body confirmation
+                    if has_5m and (c_5m_close >= c_5m_open or c_5m_close >= ref_price):
+                        logger.info(f"⏳ [5M CANDLE FILTER] Breakdown on {lvl.name} not confirmed by 5-min candle body (5m Open: {c_5m_open:.1f}, Close: {c_5m_close:.1f}).")
                         continue
 
                     # Technical Indicator Confluence Check (RSI, MACD, VWAP)
@@ -683,13 +710,13 @@ class LevelTraderStrategy(BaseStrategy):
                     and l.price > (spot + 15.0)
                 ]
                 target_level = min(res_above, key=lambda x: x.price) if res_above else None
-                spot_target_pts = (target_level.price - spot) if target_level else getattr(level, "target_spot_pts", 40.0)
-                spot_target_pts = max(30.0, min(85.0, spot_target_pts))
+                spot_target_pts = (target_level.price - spot) if target_level else getattr(level, "target_spot_pts", 50.0)
+                spot_target_pts = max(50.0, min(100.0, spot_target_pts))
 
-                # Structural SL is placed below the level support floor / zone low (+5.0 buffer)
+                # Structural SL is placed below the level support floor / zone low (+8.0 buffer)
                 ref_low = level.range_low if level.range_low is not None else level.price
-                invalidation = ref_low - 5.0
-                spot_sl_pts = max(10.0, min(25.0, spot - invalidation))
+                invalidation = ref_low - 8.0
+                spot_sl_pts = max(25.0, min(40.0, spot - invalidation))
             else:
                 # Bearish (Put): Target is the next distinct underlying support level
                 sup_below = [
@@ -699,13 +726,13 @@ class LevelTraderStrategy(BaseStrategy):
                     and l.price < (spot - 15.0)
                 ]
                 target_level = max(sup_below, key=lambda x: x.price) if sup_below else None
-                spot_target_pts = (spot - target_level.price) if target_level else getattr(level, "target_spot_pts", 40.0)
-                spot_target_pts = max(30.0, min(85.0, spot_target_pts))
+                spot_target_pts = (spot - target_level.price) if target_level else getattr(level, "target_spot_pts", 50.0)
+                spot_target_pts = max(50.0, min(100.0, spot_target_pts))
 
-                # Structural SL is placed above the level resistance ceiling / zone high (+5.0 buffer)
+                # Structural SL is placed above the level resistance ceiling / zone high (+8.0 buffer)
                 ref_high = level.range_high if level.range_high is not None else level.price
-                invalidation = ref_high + 5.0
-                spot_sl_pts = max(10.0, min(25.0, invalidation - spot))
+                invalidation = ref_high + 8.0
+                spot_sl_pts = max(25.0, min(40.0, invalidation - spot))
 
             # Convert Spot Points to Option Points using ATM Delta (~0.50)
             delta = 0.50
@@ -727,7 +754,9 @@ class LevelTraderStrategy(BaseStrategy):
             # Determine Option Execution Mode: Buy vs Sell
             opt_mode = getattr(settings, "OPTION_ACTION_MODE", "dynamic").lower()
             is_bounce = "Bounce" in reason or "Rejection" in reason or level.action == LevelAction.BOUNCE_ONLY.value
-            should_sell_option = (opt_mode == "sell_only") or (opt_mode == "dynamic" and is_bounce)
+            regime = self.market_structure.regimes.get(asset_key, StructureRegime.SIDEWAYS)
+            is_sideways = (regime == StructureRegime.SIDEWAYS)
+            should_sell_option = (opt_mode == "sell_only") or (opt_mode == "dynamic" and (is_bounce or is_sideways))
 
             if should_sell_option:
                 # Option Writing / Selling (Credit Setup):
@@ -803,11 +832,11 @@ class LevelTraderStrategy(BaseStrategy):
                     and l.price > (spot + 20.0)
                 ]
                 target_level = min(res_above, key=lambda x: x.price) if res_above else None
-                pts_target = (target_level.price - spot) if target_level else getattr(level, "target_spot_pts", 50.0)
-                pts_target = max(35.0, min(90.0, pts_target))
+                pts_target = (target_level.price - spot) if target_level else getattr(level, "target_spot_pts", 70.0)
+                pts_target = max(70.0, min(140.0, pts_target))
 
                 ref_low = level.range_low if level.range_low is not None else level.price
-                pts_sl = max(15.0, min(30.0, spot - (ref_low - 10.0)))
+                pts_sl = max(35.0, min(50.0, spot - (ref_low - 12.0)))
             else:
                 sup_below = [
                     l for l in active_crude_lvls 
@@ -816,11 +845,11 @@ class LevelTraderStrategy(BaseStrategy):
                     and l.price < (spot - 20.0)
                 ]
                 target_level = max(sup_below, key=lambda x: x.price) if sup_below else None
-                pts_target = (spot - target_level.price) if target_level else getattr(level, "target_spot_pts", 50.0)
-                pts_target = max(35.0, min(90.0, pts_target))
+                pts_target = (spot - target_level.price) if target_level else getattr(level, "target_spot_pts", 70.0)
+                pts_target = max(70.0, min(140.0, pts_target))
 
                 ref_high = level.range_high if level.range_high is not None else level.price
-                pts_sl = max(15.0, min(30.0, (ref_high + 10.0) - spot))
+                pts_sl = max(35.0, min(50.0, (ref_high + 12.0) - spot))
 
             target_level_name = getattr(target_level, "name", "Next Crude S/R Level")
             symbol = f"CRUDEOIL_{datetime.now().strftime('%b').upper()}FUT"

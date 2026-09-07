@@ -164,9 +164,14 @@ class MarketStructureEngine:
         px = current_price or (self.bars[asset_key][-1]["close"] if self.bars[asset_key] else 0.0)
         macro_bias = self.get_macro_bias(asset_key, px)
 
+        bars_count = len(self.bars.get(asset_key, []))
+
         if setup_direction == "BULLISH":
             if regime == StructureRegime.BEARISH:
                 return False, f"Market Structure is BEARISH (Price below EMA-20 ₹{ema:.1f}). Suppressing counter-trend Call/Long."
+
+            if not is_bounce and regime == StructureRegime.SIDEWAYS and bars_count >= 5:
+                return False, f"Market Structure is SIDEWAYS (Choppy/Range-Bound across {bars_count} bars). Directional breakout suppressed to avoid whipsaw traps."
 
             if is_bounce:
                 if macro_bias == "BEARISH":
@@ -182,6 +187,9 @@ class MarketStructureEngine:
         elif setup_direction == "BEARISH":
             if regime == StructureRegime.BULLISH:
                 return False, f"Market Structure is BULLISH (Price above EMA-20 ₹{ema:.1f}). Suppressing counter-trend Put/Short."
+
+            if not is_bounce and regime == StructureRegime.SIDEWAYS and bars_count >= 5:
+                return False, f"Market Structure is SIDEWAYS (Choppy/Range-Bound across {bars_count} bars). Directional breakdown suppressed to avoid whipsaw traps."
 
             if is_bounce:
                 if macro_bias == "BULLISH":

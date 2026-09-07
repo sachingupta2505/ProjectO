@@ -159,7 +159,14 @@ class TradeLearningLedger:
     """Thread-safe persistent storage and analytical aggregator of historical trades."""
 
     def __init__(self, ledger_path: Optional[Path] = None):
-        self.ledger_path = Path(ledger_path or DEFAULT_LEDGER_PATH)
+        import sys
+        if ledger_path is not None:
+            self.ledger_path = Path(ledger_path)
+        elif "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+            # Isolate test runs to a test ledger so production ledger is never contaminated
+            self.ledger_path = PROJECT_ROOT / "logs" / "test_trade_learning_ledger.json"
+        else:
+            self.ledger_path = DEFAULT_LEDGER_PATH
         self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.ledger_path.exists():
             self._save([])
@@ -184,6 +191,11 @@ class TradeLearningLedger:
 
     def record_trade(self, telemetry: TradeTelemetry) -> None:
         """Appends a new trade telemetry record to persistent storage."""
+        # Safety filter: never record synthetic test symbols into production ledger
+        if telemetry.symbol.startswith("TEST_") or telemetry.trade_id.startswith("TEST_"):
+            logger.debug(f"Skipping recording test trade {telemetry.trade_id} to production ledger.")
+            return
+
         records = self._load()
         records.append(telemetry.to_dict())
         self._save(records)

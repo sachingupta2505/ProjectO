@@ -117,6 +117,42 @@ class TradingBotRunner:
                 retest_leeway=leeway,
                 telegram=self.telegram
             )
+        elif self.strategy_type in ["multi", "all", "portfolio"]:
+            from core.multi_strategy_engine import MultiStrategyEngine
+            self.multi_engine = MultiStrategyEngine(
+                lots=self.lots,
+                symbol=self.index_symbol,
+                initial_capital_per_strat=100000.0,
+                telegram=self.telegram
+            )
+            self.strategy = self.multi_engine.strategies["orion"]
+        elif self.strategy_type == "cpr":
+            from strategies.cpr_trader import CPRTraderStrategy
+            self.strategy = CPRTraderStrategy(
+                broker=self.broker,
+                risk_manager=self.risk_manager,
+                lots=self.lots,
+                symbol=self.index_symbol,
+                telegram_notifier=self.telegram
+            )
+        elif self.strategy_type == "ict":
+            from strategies.ict_sweep_trader import ICTSweepTraderStrategy
+            self.strategy = ICTSweepTraderStrategy(
+                broker=self.broker,
+                risk_manager=self.risk_manager,
+                lots=self.lots,
+                symbol=self.index_symbol,
+                telegram_notifier=self.telegram
+            )
+        elif self.strategy_type == "theta":
+            from strategies.theta_decay_trader import ThetaDecayTraderStrategy
+            self.strategy = ThetaDecayTraderStrategy(
+                broker=self.broker,
+                risk_manager=self.risk_manager,
+                lots=self.lots,
+                symbol=self.index_symbol,
+                telegram_notifier=self.telegram
+            )
         elif self.strategy_type == "straddle":
             self.strategy = ShortStraddleStrategy(
                 broker=self.broker,
@@ -170,7 +206,10 @@ class TradingBotRunner:
             logger.error("Failed to authenticate with broker. Exiting.")
             return
 
-        self.strategy.initialize()
+        if hasattr(self, "multi_engine") and self.multi_engine:
+            self.multi_engine.initialize()
+        else:
+            self.strategy.initialize()
         if listen_telegram:
             self.telegram.start()
         self.running = True
@@ -332,14 +371,18 @@ class TradingBotRunner:
                     self._crude_bar_high = crude_spot
                     self._crude_bar_low = crude_spot
 
-        elif isinstance(self.strategy, OpeningRetestStrategy):
+        elif isinstance(self.strategy, OpeningRetestStrategy) or (hasattr(self, "multi_engine") and self.multi_engine) or (hasattr(self.strategy, "on_bar")):
             # 1. Update spot tick to monitor active SL, Target 1 Breakeven, Target 2
-            self.strategy.on_tick(Tick(
+            tick_obj = Tick(
                 token=99926000,
-                symbol=self.strategy.symbol,
+                symbol=self.index_symbol,
                 ltp=nifty_spot,
                 timestamp=now
-            ))
+            )
+            if hasattr(self, "multi_engine") and self.multi_engine:
+                self.multi_engine.on_tick(tick_obj)
+            else:
+                self.strategy.on_tick(tick_obj)
 
             # 2. Accumulate real 5-minute candle
             if self._5m_bar_open is None:
@@ -365,7 +408,10 @@ class TradingBotRunner:
                     "close": n_close,
                     "volume": vol
                 }
-                self.strategy.on_bar(bar_5m)
+                if hasattr(self, "multi_engine") and self.multi_engine:
+                    self.multi_engine.on_bar(bar_5m)
+                else:
+                    self.strategy.on_bar(bar_5m)
 
                 # Reset accumulator
                 self._5m_bar_open = nifty_spot
@@ -373,7 +419,8 @@ class TradingBotRunner:
                 self._5m_bar_low = nifty_spot
 
         # 4. Check Strategy Exits & Multi-Session Square-Off
-        self.strategy.check_exit_conditions(now)
+        if hasattr(self.strategy, "check_exit_conditions"):
+            self.strategy.check_exit_conditions(now)
 
         # 5. Evaluate RMS Daily Target (+₹10k) and Daily Stop Loss (-₹5k)
         margins = self.broker.get_margins()
@@ -409,7 +456,7 @@ def main():
     parser = argparse.ArgumentParser(description="Multi-Asset Algorithmic Trading Bot (NIFTY 50 & CRUDE OIL)")
     parser.add_argument("--mode", choices=["paper", "live"], default="paper", help="Execution mode: paper or live")
     parser.add_argument("--broker", choices=["paper", "angel"], default="paper", help="Broker adapter to use")
-    parser.add_argument("--strategy", choices=["sr_trader", "level_trader", "straddle", "momentum", "opening_retest", "retest"], default="sr_trader", help="Strategy to trade (default: sr_trader)")
+    parser.add_argument("--strategy", choices=["multi", "all", "opening_retest", "retest", "cpr", "ict", "theta", "sr_trader", "level_trader", "straddle", "momentum"], default="multi", help="Strategy to trade (default: multi)")
     parser.add_argument("--index", choices=["NIFTY", "FINNIFTY", "SENSEX", "BANKNIFTY"], default="NIFTY", help="Target index for opening retest (default: NIFTY)")
     parser.add_argument("--lots", type=int, default=getattr(settings, "DEFAULT_LOTS", 1), help="Number of lots to trade")
     parser.add_argument("--ui", choices=["terminal", "web", "headless"], default="headless", help="UI to display")

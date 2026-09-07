@@ -125,3 +125,7 @@ class Tick:
     bid_price: float = 0.0
     ask_price: float = 0.0
     change_pct: float = 0.0
+
+    @property
+    def price(self) -> float:
+        return self.ltp

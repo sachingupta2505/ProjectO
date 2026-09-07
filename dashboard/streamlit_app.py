@@ -522,28 +522,36 @@ def render_dashboard():
         st.divider()
 
         # Capital Management & Reset
-        st.subheader("💰 Capital Management")
+        st.subheader("💰 Capital Allocation")
         cap_option = st.selectbox(
-            "Set Starting Capital",
+            "Capital Per Strategy",
             ["₹50,000", "₹1,00,000 (Recommended)", "₹2,00,000", "₹5,00,000"],
             index=1
         )
         cap_val = 50000.0 if "50,000" in cap_option else (100000.0 if "1,00,000" in cap_option else (200000.0 if "2,00,000" in cap_option else 500000.0))
-        if st.button("🔄 Reset Capital to " + cap_option.split(" ")[0], use_container_width=True):
+        if st.button("🔄 Reset All 4 Accounts (₹" + f"{int(cap_val/1000)}k each)", use_container_width=True):
+            for name in ["orion", "cpr", "ict", "theta", "default"]:
+                PaperBroker(account_name=name, persist=True).reset_account(cap_val)
             st.session_state.paper_broker.reset_account(cap_val)
-            st.success(f"✅ Capital cleanly reset to ₹{cap_val:,.2f}! Orders and positions cleared.")
+            st.success(f"✅ All 4 Strategy accounts reset to ₹{cap_val:,.2f} each (Total: ₹{cap_val*4:,.2f})!")
             st.rerun()
 
         st.divider()
 
-        st.subheader("⚙️ Active Strategy")
+        st.subheader("⚙️ Incubator Portfolio")
         strat_type = st.selectbox(
-            "Selected Strategy",
-            ["ORION-15 (Opening Retest)", "Dual-Asset S/R Level Trader", "9:20 AM Short Straddle"],
+            "Selected Strategy View",
+            [
+                "🌐 Multi-Strategy Portfolio (All 4)",
+                "🚀 ORION-15 (Opening Retest)",
+                "🏛️ CPR-Institutional (Pivot Engine)",
+                "⚡ ICT-Liquidity (Sweep & FVG)",
+                "⏳ THETA-0DTE (Expiry Scalp)"
+            ],
             index=0
         )
-        lots = st.number_input("Trading Lots (1 Lot = 65 Qty)", min_value=1, max_value=10, value=2)
-        st.markdown(f"⚡ Contract Size: **{lots * settings.NIFTY_LOT_SIZE} Qty** ({lots} Lots)")
+        lots = st.number_input("Trading Lots per Strategy (1 Lot = 65 Qty)", min_value=1, max_value=10, value=2)
+        st.markdown(f"⚡ Per Strategy Size: **{lots * settings.NIFTY_LOT_SIZE} Qty** ({lots} Lots)")
         sl_pct = st.slider("Max Option Risk Cap (%)", min_value=10, max_value=50, value=25, step=5)
 
         st.divider()
@@ -624,18 +632,23 @@ def render_dashboard():
         m4.metric("Available Cash", f"₹{avail_cash:,.2f}" if avail_cash > 0 else "SmartAPI Auth OK")
 
     else:
-        margins = st.session_state.paper_broker.get_margins()
-        tot_pnl = margins["total_pnl"]
-        init_cap = margins.get("initial_capital", 100000.0)
-        avail_cash = margins.get("available_cash", 100000.0)
-        charges = margins.get("total_charges", 0.0)
+        all_brokers = [
+            PaperBroker(account_name="orion", persist=True),
+            PaperBroker(account_name="cpr", persist=True),
+            PaperBroker(account_name="ict", persist=True),
+            PaperBroker(account_name="theta", persist=True)
+        ]
+        tot_cap = sum(b.initial_capital for b in all_brokers)
+        tot_cash = sum(b.available_cash for b in all_brokers)
+        tot_pnl = sum(b.get_margins()["total_pnl"] for b in all_brokers)
+        tot_used = sum(b.get_margins().get("margin_used", 0.0) for b in all_brokers)
         
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("💰 Starting Capital", f"₹{init_cap:,.2f}", "Baseline")
-        m2.metric("💵 Available Funds", f"₹{avail_cash:,.2f}", f"₹{margins.get('margin_used', 0.0):,.2f} Used")
+        m1.metric("💰 Incubator Capital", f"₹{tot_cap:,.2f}", "4 Accounts × ₹1L")
+        m2.metric("💵 Available Funds", f"₹{tot_cash:,.2f}", f"₹{tot_used:,.2f} Used")
         m3.metric("📈 Today's Net Profit", f"₹{tot_pnl:+,.2f}", delta=f"{tot_pnl:+,.2f}", delta_color="normal")
-        m4.metric("🎯 Active Strategy", "ORION-15 (NIFTY)", f"{lots} Lots ({lots * settings.NIFTY_LOT_SIZE} Qty) Paper")
-        m5.metric("🤖 Bot Daemon", "🟢 Standby", "Armed for 09:15 AM")
+        m4.metric("🎯 Active Strategies", "4 Running Parallel", f"{lots} Lots Each (NIFTY)")
+        m5.metric("🤖 Multi-Bot Daemon", "🟢 All Armed", "Standby for 09:15 AM")
 
     st.divider()
 
@@ -721,21 +734,59 @@ def render_dashboard():
         with ctrl_col1:
             selected_strat = st.selectbox(
                 "Select Strategy Ledger",
-                ["ORION-15 (Opening Retest)", "LevelTrader (S/R Breakout & Bounce)", "ShortStraddle (9:20 AM)", "MomentumBuyer"],
+                [
+                    "🚀 ORION-15 (Opening Retest)",
+                    "🏛️ CPR-Institutional (Pivot Engine)",
+                    "⚡ ICT-Liquidity (Sweep & FVG)",
+                    "⏳ THETA-0DTE (Expiry Scalp)",
+                    "🌐 Combined Multi-Strategy Portfolio"
+                ],
                 index=0
             )
         with ctrl_col2:
-            strat_key = "orion" if "ORION" in selected_strat else ("leveltrader" if "Level" in selected_strat else ("shortstraddle" if "Straddle" in selected_strat else "momentum"))
+            if "ORION" in selected_strat:
+                strat_key = "orion"
+            elif "CPR" in selected_strat:
+                strat_key = "cpr"
+            elif "ICT" in selected_strat:
+                strat_key = "ict"
+            elif "THETA" in selected_strat:
+                strat_key = "theta"
+            else:
+                strat_key = "combined"
+
             data_source = st.radio(
                 "Data Source",
-                ["🟢 Live & Paper Trial (Upcoming 30 Days)", "📊 6-Month Backtest Benchmark (34 Trades)", "🌐 Combined View"],
-                index=1 if strat_key == "orion" else 0,
+                ["🟢 Live & Paper Trial (Upcoming 30 Days)", "📊 Benchmark / Combined View"],
+                index=0,
                 horizontal=True
             )
 
-        source_param = "benchmark" if "Benchmark" in data_source else ("all" if "Combined" in data_source else "live")
-        summary = strategy_ledger.get_summary(strat_key, source=source_param)
-        trades_list = strategy_ledger.load_trades(strat_key, source=source_param)
+        source_param = "benchmark" if "Benchmark" in data_source else "live"
+
+        if strat_key == "combined":
+            trades_list = []
+            for k in ["orion", "cpr", "ict", "theta"]:
+                trades_list.extend(strategy_ledger.load_trades(k, source="all"))
+            trades_list.sort(key=lambda x: str(x.get("date", "")) + str(x.get("entry_time", "")))
+            tot_t = len(trades_list)
+            wins = [t for t in trades_list if float(t.get("net_pnl", 0)) > 0]
+            losses = [t for t in trades_list if float(t.get("net_pnl", 0)) < 0]
+            net_p = sum(float(t.get("net_pnl", 0)) for t in trades_list)
+            gw = sum(float(t.get("net_pnl", 0)) for t in wins)
+            gl = abs(sum(float(t.get("net_pnl", 0)) for t in losses))
+            summary = {
+                "total_trades": tot_t,
+                "win_rate_pct": (len(wins) / tot_t * 100.0) if tot_t > 0 else 0.0,
+                "net_pnl": net_p,
+                "profit_factor": (gw / gl) if gl > 0 else (1.0 if gw == 0 else 99.0),
+                "avg_win": (gw / len(wins)) if wins else 0.0,
+                "avg_loss": (gl / len(losses)) if losses else 0.0,
+                "max_drawdown": 0.0
+            }
+        else:
+            summary = strategy_ledger.get_summary(strat_key, source=source_param)
+            trades_list = strategy_ledger.load_trades(strat_key, source=source_param)
 
         st.markdown("<br>", unsafe_allow_html=True)
 

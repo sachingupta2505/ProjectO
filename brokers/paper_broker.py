@@ -21,7 +21,8 @@ logger = get_logger("PaperBroker")
 
 
 class PaperBroker(BaseBroker):
-    def __init__(self, initial_capital: float = 200000.0, slippage_pct: float = 0.002, persist: bool = False):
+    def __init__(self, initial_capital: float = 100000.0, slippage_pct: float = 0.002, persist: bool = False, account_name: str = "default"):
+        self.account_name = account_name
         self.initial_capital = initial_capital
         self.available_cash = initial_capital
         self.total_charges: float = 0.0
@@ -38,7 +39,11 @@ class PaperBroker(BaseBroker):
         self.daily_realized_pnl: float = 0.0
         self.daily_charges: float = 0.0
 
-        self.state_file = Path(__file__).resolve().parent.parent / "logs" / "paper_broker_state.json"
+        if account_name == "default":
+            self.state_file = Path(__file__).resolve().parent.parent / "logs" / "paper_broker_state.json"
+        else:
+            self.state_file = Path(__file__).resolve().parent.parent / "logs" / f"paper_broker_{account_name}.json"
+
         if self.persist:
             self._load_state()
 

@@ -33,12 +33,12 @@ class TradingLevel:
     action: str = LevelAction.BOTH.value
     range_low: Optional[float] = None
     range_high: Optional[float] = None
-    target_pct: float = 0.05       # 5% option target by default (asymmetric 2:1 RR)
-    sl_pct: float = 0.025          # 2.5% option stop loss by default
+    target_pct: float = 0.10       # 10% option target by default (asymmetric 2:1 RR)
+    sl_pct: float = 0.05           # 5% option stop loss by default
     target_spot_pts: float = 40.0  # Spot points target
     sl_spot_pts: float = 20.0      # Spot points stop loss
-    trail_sl_pct: float = 0.015    # 1.5% trailing stop distance for options
-    breakeven_pct: float = 0.02    # Move SL to breakeven once +2.0% is reached
+    trail_sl_pct: float = 0.025    # 2.5% trailing stop distance for options
+    breakeven_pct: float = 0.04    # Move SL to breakeven once +4.0% is reached
     trail_sl_pts: float = 15.0     # 15 pts trailing stop distance for Crude Oil
     breakeven_pts: float = 20.0    # 20 pts to trigger breakeven for Crude Oil
     is_active: bool = True

@@ -22,14 +22,13 @@ import numpy as np
 
 from config.settings import settings
 from core.logger import get_logger
-from core.models import Tick, Instrument, OrderSide
+from core.models import Tick, Instrument
 from core.risk_manager import RiskManager
-from core.option_chain import get_atm_strike, format_nifty_symbol
+from core.option_chain import get_atm_strike
 from core.market_data import (
     get_live_nifty_spot, get_live_crude_spot, get_live_option_quote
 )
 from brokers.paper_broker import PaperBroker
-from brokers.zerodha_broker import ZerodhaBroker
 from brokers.angel_broker import AngelOneBroker
 from strategies.level_trader import LevelTraderStrategy
 from strategies.short_straddle import ShortStraddleStrategy
@@ -58,8 +57,6 @@ class TradingBotRunner:
         self.running = False
         self._rms_halted = False
         self._last_bar_time = 0.0
-        self._prev_nifty_spot: Optional[float] = None
-        self._prev_crude_spot: Optional[float] = None
         # True candle aggregation state (1-minute bars with genuine high/low tracking)
         self._nifty_bar_open: Optional[float] = None
         self._nifty_bar_high: float = -1e9
@@ -88,8 +85,6 @@ class TradingBotRunner:
                 slippage_pct=settings.SLIPPAGE_PCT,
                 persist=True
             )
-        elif self.broker_type == "zerodha":
-            self.broker = ZerodhaBroker()
         elif self.broker_type == "angel":
             self.broker = AngelOneBroker()
         else:
@@ -224,7 +219,10 @@ class TradingBotRunner:
             except Exception as e:
                 logger.debug(f"Crude spot query: {e}")
 
-        # 2a. Directly update LTP for all open broker positions from live market feeds
+        # 2a. Directly update LTP for all open broker positions & commodity symbols from live feeds
+        curr_crude_fut = f"CRUDEOIL_{datetime.now().strftime('%b').upper()}FUT"
+        self.broker.set_ltp("CRUDEOIL", crude_spot)
+        self.broker.set_ltp(curr_crude_fut, crude_spot)
         open_pos_map = self.broker.get_positions()
         for sym, pos in open_pos_map.items():
             if pos.quantity != 0:
@@ -335,7 +333,7 @@ class TradingBotRunner:
 def main():
     parser = argparse.ArgumentParser(description="Multi-Asset Algorithmic Trading Bot (NIFTY 50 & CRUDE OIL)")
     parser.add_argument("--mode", choices=["paper", "live"], default="paper", help="Execution mode: paper or live")
-    parser.add_argument("--broker", choices=["paper", "zerodha", "angel"], default="paper", help="Broker adapter to use")
+    parser.add_argument("--broker", choices=["paper", "angel"], default="paper", help="Broker adapter to use")
     parser.add_argument("--strategy", choices=["sr_trader", "level_trader", "straddle", "momentum"], default="sr_trader", help="Strategy to trade (default: sr_trader)")
     parser.add_argument("--lots", type=int, default=getattr(settings, "DEFAULT_LOTS", 2), help="Number of lots to trade")
     parser.add_argument("--ui", choices=["terminal", "web", "headless"], default="headless", help="UI to display")

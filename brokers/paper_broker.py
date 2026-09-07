@@ -235,7 +235,11 @@ class PaperBroker(BaseBroker):
             order.order_id = f"PAPER_{uuid.uuid4().hex[:8].upper()}"
 
         symbol = order.instrument.symbol
-        current_ltp = self.market_prices.get(symbol, order.price if (order.price and order.price > 0) else 100.0)
+        if order.price and order.price > 0:
+            current_ltp = float(order.price)
+            self.market_prices[symbol] = current_ltp
+        else:
+            current_ltp = self.market_prices.get(symbol, 100.0)
 
         # Immediate fill for Market Orders
         if order.order_type == OrderType.MARKET:

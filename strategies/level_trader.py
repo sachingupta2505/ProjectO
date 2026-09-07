@@ -39,8 +39,8 @@ class LevelTraderStrategy(BaseStrategy):
         levels: Optional[List[TradingLevel]] = None,
         lots: int = 2,
         volume_multiplier: float = 1.3,
-        default_tp_pct: float = 0.05,
-        default_sl_pct: float = 0.025,
+        default_tp_pct: float = 0.10,
+        default_sl_pct: float = 0.05,
         max_trades_per_day: int = 5,
         adaptive_optimizer: Optional[Any] = None,
         enable_adaptive_learning: bool = True

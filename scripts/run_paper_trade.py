@@ -38,8 +38,8 @@ logger = get_logger("PaperTrader")
 
 def execute_paper_trade(
     opt_type_str: str = "PE",
-    target_pct: float = 0.05,
-    sl_pct: float = 0.025,
+    target_pct: float = 0.10,
+    sl_pct: float = 0.05,
     lots: int = 2,
     custom_price: Optional[float] = None,
     custom_strike: Optional[int] = None,

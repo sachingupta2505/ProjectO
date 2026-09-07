@@ -513,7 +513,7 @@ class TelegramBridge:
         elif cmd in ("/crude", "/crudeoil", "/oil"):
             return self._cmd_crude()
         elif cmd in ("/levels", "/sr", "/zones"):
-            return self._cmd_levels()
+            return self._cmd_levels(cmd_parts[1:])
         elif cmd in ("/buype", "/buyput", "/pe"):
             return self._cmd_buy_option("PE", cmd_parts[1:])
         elif cmd in ("/buyce", "/buycall", "/ce"):
@@ -890,8 +890,8 @@ class TelegramBridge:
 
             lines.append(
                 "\n💡 <b>Quick Actions:</b>\n"
-                "• Send /buype to buy ATM Put (2% target & 2% SL)\n"
-                "• Send /buyce to buy ATM Call (2% target & 2% SL)\n"
+                "• Send /buype to buy ATM Put (10% target & 5% SL, 2:1 RR)\n"
+                "• Send /buyce to buy ATM Call (10% target & 5% SL, 2:1 RR)\n"
                 "• Custom price: <code>/buype 75.0</code>"
             )
             return "\n".join(lines)
@@ -921,8 +921,8 @@ class TelegramBridge:
                 target=execute_paper_trade,
                 kwargs={
                     "opt_type_str": opt_type,
-                    "target_pct": 0.02,
-                    "sl_pct": 0.02,
+                    "target_pct": 0.10,
+                    "sl_pct": 0.05,
                     "lots": 1,
                     "custom_price": custom_price,
                     "custom_strike": custom_strike,
@@ -1043,13 +1043,24 @@ class TelegramBridge:
         except Exception as e:
             return f"⚠️ Error fetching Crude Oil data: {e}"
 
-    def _cmd_levels(self) -> str:
+    def _cmd_levels(self, args: Optional[List[str]] = None) -> str:
         try:
             from core.level_models import load_levels_config
-            from core.market_data import get_live_nifty_spot
-            spot_data = get_live_nifty_spot()
-            spot = float(spot_data.get("spot", 23950.0))
-            lvls = load_levels_config()
+            from core.market_data import get_live_nifty_spot, get_live_crude_spot
+
+            is_crude = bool(args and any("CRUDE" in a.upper() for a in args))
+            if is_crude:
+                crude = get_live_crude_spot()
+                spot = float(crude.get("spot", 8700.0))
+                lvls = load_levels_config("CRUDEOIL")
+                title = "🛢️ <b>CRUDE OIL Key Support & Resistance Levels</b>\n"
+                pts_label = "pts"
+            else:
+                spot_data = get_live_nifty_spot()
+                spot = float(spot_data.get("spot", 23950.0))
+                lvls = load_levels_config("NIFTY")
+                title = "🎯 <b>NIFTY 50 Support & Resistance Levels</b>\n"
+                pts_label = "pts"
 
             supports = [l for l in lvls if l.is_active and l.price < spot]
             resistances = [l for l in lvls if l.is_active and l.price > spot]
@@ -1058,14 +1069,14 @@ class TelegramBridge:
             nearest_res = min(resistances, key=lambda x: x.price) if resistances else None
 
             lines = [
-                "🎯 <b>NIFTY Support & Resistance Levels</b>\n",
+                title,
                 f"• <b>Current Spot:</b> <b>₹{spot:,.2f}</b>\n"
             ]
 
             if nearest_res:
-                lines.append(f"🔴 <b>Nearest Resistance:</b> ₹{nearest_res.price:,.2f} (<b>+{nearest_res.price - spot:.1f} pts</b> away)\n  ↳ <i>{nearest_res.name}</i>")
+                lines.append(f"🔴 <b>Nearest Resistance:</b> ₹{nearest_res.price:,.2f} (<b>+{nearest_res.price - spot:.1f} {pts_label}</b> away)\n  ↳ <i>{nearest_res.name}</i>")
             if nearest_sup:
-                lines.append(f"🟢 <b>Nearest Support:</b> ₹{nearest_sup.price:,.2f} (<b>-{spot - nearest_sup.price:.1f} pts</b> away)\n  ↳ <i>{nearest_sup.name}</i>\n")
+                lines.append(f"🟢 <b>Nearest Support:</b> ₹{nearest_sup.price:,.2f} (<b>-{spot - nearest_sup.price:.1f} {pts_label}</b> away)\n  ↳ <i>{nearest_sup.name}</i>\n")
 
             lines.append("<code>LEVEL      | TYPE | ACTION  | DISTANCE</code>")
             lines.append("<code>-------------------------------------</code>")
@@ -1076,12 +1087,21 @@ class TelegramBridge:
                 act = l.action[:4]
                 lines.append(f"<code>{l.price:<10.1f} | {tag:<4} | {act:<7} | {dist:+8.1f}</code>")
 
-            lines.append(
-                "\n💡 <b>Trading Actions:</b>\n"
-                "• Send /buype to buy ATM Put (2% Target & 2% SL)\n"
-                "• Send /buyce to buy ATM Call (2% Target & 2% SL)\n"
-                "• Send /options to view live ATM option chain table"
-            )
+            if not is_crude:
+                lines.append(
+                    "\n💡 <b>Trading Actions:</b>\n"
+                    "• Send /buype to buy ATM Put (10% Target & 5% SL, 2:1 RR)\n"
+                    "• Send /buyce to buy ATM Call (10% Target & 5% SL, 2:1 RR)\n"
+                    "• Send /options to view live ATM option chain table\n"
+                    "• Send /levels crude to view MCX Crude Oil levels"
+                )
+            else:
+                lines.append(
+                    "\n💡 <b>Trading Actions:</b>\n"
+                    "• Automated S/R Trigger: 70 pts Target & 35 pts SL (2:1 RR)\n"
+                    "• Send /levels to view NIFTY 50 levels\n"
+                    "• Send /crude to view live MCX Continuous Feed"
+                )
             return "\n".join(lines)
         except Exception as e:
             return f"⚠️ Error fetching levels: {e}"

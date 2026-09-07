@@ -35,23 +35,42 @@ class StrategyLedgerManager:
         return LEDGER_DIR / f"{sanitized}_ledger.json"
 
     @classmethod
-    def load_trades(cls, strategy_name: str) -> List[Dict[str, Any]]:
-        path = cls._get_ledger_path(strategy_name)
-        if not path.exists():
-            return []
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data if isinstance(data, list) else []
-        except Exception as e:
-            logger.error(f"Error loading ledger for {strategy_name}: {e}")
-            return []
+    def load_trades(cls, strategy_name: str, source: str = "live") -> List[Dict[str, Any]]:
+        """
+        Loads trades for strategy.
+        source options: 'live' (live/paper trial), 'benchmark' (6M backtest), 'all' (combined)
+        """
+        sanitized = strategy_name.lower().replace(" ", "_").replace("-", "_")
+        trades = []
+
+        live_path = LEDGER_DIR / f"{sanitized}_ledger.json"
+        bench_path = LEDGER_DIR / f"{sanitized}_backtest_ledger.json"
+
+        if source in ["live", "all"] and live_path.exists():
+            try:
+                with open(live_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        trades.extend(data)
+            except Exception as e:
+                logger.error(f"Error loading live ledger for {strategy_name}: {e}")
+
+        if source in ["benchmark", "all"] and bench_path.exists():
+            try:
+                with open(bench_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        trades.extend(data)
+            except Exception as e:
+                logger.error(f"Error loading benchmark ledger for {strategy_name}: {e}")
+
+        return trades
 
     @classmethod
     def record_trade(cls, strategy_name: str, trade_record: Dict[str, Any]) -> bool:
         """Appends a new trade record to the strategy's dedicated ledger."""
         path = cls._get_ledger_path(strategy_name)
-        trades = cls.load_trades(strategy_name)
+        trades = cls.load_trades(strategy_name, source="live")
 
         # Assign unique trade ID if not provided
         if "trade_id" not in trade_record or not trade_record["trade_id"]:
@@ -72,9 +91,9 @@ class StrategyLedgerManager:
             return False
 
     @classmethod
-    def get_summary(cls, strategy_name: str) -> Dict[str, Any]:
+    def get_summary(cls, strategy_name: str, source: str = "live") -> Dict[str, Any]:
         """Calculates key performance metrics for a strategy."""
-        trades = cls.load_trades(strategy_name)
+        trades = cls.load_trades(strategy_name, source=source)
         if not trades:
             return {
                 "strategy": strategy_name,

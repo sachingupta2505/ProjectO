@@ -27,6 +27,7 @@ from core.risk_manager import RiskManager
 from strategies.short_straddle import ShortStraddleStrategy
 from core.market_data import get_live_nifty_spot, get_live_banknifty_spot, get_live_crude_spot
 from config.settings import settings
+from core.strategy_ledger import strategy_ledger
 import streamlit.components.v1 as components
 from dashboard.ticker_service import start_ticker_service
 
@@ -616,8 +617,10 @@ def render_dashboard():
 
     st.divider()
 
-    # Tabs: S/R Levels, Trades, Positions, Balance, Strategy, Greeks, AI Learning
-    tab_levels, tab_trades, tab_pos, tab_balance, tab_strat, tab_greeks, tab_learning = st.tabs([
+    # Tabs: ORION-15 Cockpit, Strategy Ledgers, S/R Levels, Trades, Positions, Balance, Strategy, Greeks, AI Learning
+    tab_orion, tab_ledger, tab_levels, tab_trades, tab_pos, tab_balance, tab_strat, tab_greeks, tab_learning = st.tabs([
+        "🚀 ORION-15 Cockpit",
+        "🏛️ Strategy Ledgers",
         "🎯 S/R Level Trader",
         "📜 Trade Book & Orders",
         "📊 Active Positions & PnL",
@@ -628,7 +631,212 @@ def render_dashboard():
     ])
 
     # ======================================================================
-    # TAB 0: S/R Level Trader (Dual-Asset: NIFTY 50 & CRUDE OIL)
+    # TAB 1: ORION-15 Cockpit (Opening Retest Automated Engine)
+    # ======================================================================
+    with tab_orion:
+        st.subheader("🚀 ORION-15: Opening Retest Institutional Engine")
+        st.markdown(
+            "Automated execution of the **15-Minute Opening Retest Setup** on **NIFTY 50**. "
+            "Evaluates the first 15m candle (09:15-09:30 AM), verifies conviction body & wick rejection, "
+            "monitors the 50% retest zone, and ratchets Stop Loss to Breakeven at Target 1."
+        )
+
+        # Status & Controls
+        c_stat1, c_stat2, c_stat3 = st.columns(3)
+        c_stat1.success("🟢 **Bot Status:** ARMED & ACTIVE (Daemon)")
+        c_stat2.info("🎯 **Target Index:** NIFTY 50 (Weekly Tuesday Expiry)")
+        c_stat3.warning("🧪 **Execution Mode:** PAPER TRIAL (1 Month Evaluation)")
+
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #181d28 0%, #131722 100%); border: 1px solid #2962ff; border-radius: 10px; padding: 18px; margin: 15px 0; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+            <div style="font-size: 14px; font-weight: bold; color: #2962ff; text-transform: uppercase; margin-bottom: 8px;">
+                ⚡ ORION-15 Execution Schedule & Rules
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-top: 10px;">
+                <div style="background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border-left: 3px solid #00f2fe;">
+                    <div style="font-size: 11px; color: #848e9c;">09:15 - 09:30 AM</div>
+                    <div style="font-weight: 700; color: #fff; margin-top: 3px;">15m Candle Formation</div>
+                    <div style="font-size: 11px; color: #848e9c; margin-top: 3px;">Aggregates first three 5m bars</div>
+                </div>
+                <div style="background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border-left: 3px solid #089981;">
+                    <div style="font-size: 11px; color: #848e9c;">09:30 AM Sharp</div>
+                    <div style="font-weight: 700; color: #fff; margin-top: 3px;">Conviction Validation</div>
+                    <div style="font-size: 11px; color: #848e9c; margin-top: 3px;">Body ≥ 30 pts, Wick &lt; 85%</div>
+                </div>
+                <div style="background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border-left: 3px solid #f59e0b;">
+                    <div style="font-size: 11px; color: #848e9c;">09:30 - 11:30 AM</div>
+                    <div style="font-weight: 700; color: #fff; margin-top: 3px;">50% Retest Entry Zone</div>
+                    <div style="font-size: 11px; color: #848e9c; margin-top: 3px;">Enters on 5m confirmation bounce</div>
+                </div>
+                <div style="background: rgba(255,255,255,0.03); padding: 10px; border-radius: 6px; border-left: 3px solid #8b5cf6;">
+                    <div style="font-size: 11px; color: #848e9c;">Target 1 & 2</div>
+                    <div style="font-weight: 700; color: #fff; margin-top: 3px;">Breakeven Ratchet 🔒</div>
+                    <div style="font-size: 11px; color: #848e9c; margin-top: 3px;">SL to BE @ T1, Take Profit @ T2</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("### 📊 Today's ORION Setup Parameters")
+        o_col1, o_col2, o_col3, o_col4 = st.columns(4)
+        o_col1.metric("Min Body Filter", "30.0 pts", "Conviction Guard")
+        o_col2.metric("Retest Zone", "50% Retracement", "Fibonacci Pullback")
+        o_col3.metric("Target 1 (Breakeven)", "First 15m Extremum", "Risk-Free Lock")
+        o_col4.metric("Target 2 (Take Profit)", "15m Body × 80%", "Directional Expansion")
+
+        st.divider()
+
+        # Telemetry & Quick Link to Ledger
+        st.info("💡 All trades taken by ORION-15 are automatically recorded in real-time into the **Strategy Ledger**. Check the **🏛️ Strategy Ledgers** tab to view complete trade forensics and historical benchmark data.")
+
+    # ======================================================================
+    # TAB 2: Strategy Ledgers (Dedicated Multi-Strategy Trade Audit)
+    # ======================================================================
+    with tab_ledger:
+        st.subheader("🏛️ Strategy Trade Ledgers & Quantitative Analytics")
+        st.markdown("Each algorithmic strategy maintains an isolated, independent trade ledger to track performance, win rates, drawdown, and execution anomalies.")
+
+        # Top Controls: Strategy Selector & Data Source Toggle
+        ctrl_col1, ctrl_col2 = st.columns([2, 2])
+        with ctrl_col1:
+            selected_strat = st.selectbox(
+                "Select Strategy Ledger",
+                ["ORION-15 (Opening Retest)", "LevelTrader (S/R Breakout & Bounce)", "ShortStraddle (9:20 AM)", "MomentumBuyer"],
+                index=0
+            )
+        with ctrl_col2:
+            strat_key = "orion" if "ORION" in selected_strat else ("leveltrader" if "Level" in selected_strat else ("shortstraddle" if "Straddle" in selected_strat else "momentum"))
+            data_source = st.radio(
+                "Data Source",
+                ["🟢 Live & Paper Trial (Upcoming 30 Days)", "📊 6-Month Backtest Benchmark (34 Trades)", "🌐 Combined View"],
+                index=1 if strat_key == "orion" else 0,
+                horizontal=True
+            )
+
+        source_param = "benchmark" if "Benchmark" in data_source else ("all" if "Combined" in data_source else "live")
+        summary = strategy_ledger.get_summary(strat_key, source=source_param)
+        trades_list = strategy_ledger.load_trades(strat_key, source=source_param)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Eye-Candy Glowing KPI Cards
+        pnl_val = summary.get("net_pnl", 0.0)
+        pnl_color = "#089981" if pnl_val >= 0 else "#f23645"
+        pnl_sign = "+" if pnl_val > 0 else ""
+        win_rate = summary.get("win_rate_pct", 0.0)
+        profit_factor = summary.get("profit_factor", 0.0)
+        tot_trades = summary.get("total_trades", 0)
+        avg_win = summary.get("avg_win", 0.0)
+        avg_loss = summary.get("avg_loss", 0.0)
+        max_dd = summary.get("max_drawdown", 0.0)
+        rr_str = f"1:{abs(avg_win / avg_loss):.1f}" if avg_loss != 0 else "1:1.0"
+
+        card_html = f"""
+        <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 20px;">
+            <div style="background: linear-gradient(135deg, rgba(24, 29, 40, 0.95), rgba(19, 23, 34, 0.95)); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.25);">
+                <div style="font-size: 11px; font-weight: 700; color: #848e9c; text-transform: uppercase;">Total Trades</div>
+                <div style="font-size: 22px; font-weight: 800; color: #ffffff; margin-top: 4px;">{tot_trades}</div>
+                <div style="font-size: 10px; color: #2962ff; margin-top: 2px;">Executed</div>
+            </div>
+            <div style="background: linear-gradient(135deg, rgba(24, 29, 40, 0.95), rgba(19, 23, 34, 0.95)); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.25);">
+                <div style="font-size: 11px; font-weight: 700; color: #848e9c; text-transform: uppercase;">Win Rate</div>
+                <div style="font-size: 22px; font-weight: 800; color: {'#089981' if win_rate >= 40 else '#f59e0b'}; margin-top: 4px;">{win_rate:.1f}%</div>
+                <div style="font-size: 10px; color: #848e9c; margin-top: 2px;">Hit Ratio</div>
+            </div>
+            <div style="background: linear-gradient(135deg, rgba(24, 29, 40, 0.95), rgba(19, 23, 34, 0.95)); border: 1px solid {pnl_color}; border-radius: 10px; padding: 14px; text-align: center; box-shadow: 0 4px 16px rgba(8, 153, 129, 0.2);">
+                <div style="font-size: 11px; font-weight: 700; color: #848e9c; text-transform: uppercase;">Net Realized P&L</div>
+                <div style="font-size: 22px; font-weight: 800; color: {pnl_color}; margin-top: 4px;">{pnl_sign}₹{pnl_val:,.2f}</div>
+                <div style="font-size: 10px; color: {pnl_color}; margin-top: 2px;">After Brokerage & Taxes</div>
+            </div>
+            <div style="background: linear-gradient(135deg, rgba(24, 29, 40, 0.95), rgba(19, 23, 34, 0.95)); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.25);">
+                <div style="font-size: 11px; font-weight: 700; color: #848e9c; text-transform: uppercase;">Profit Factor</div>
+                <div style="font-size: 22px; font-weight: 800; color: #00f2fe; margin-top: 4px;">{profit_factor:.2f}</div>
+                <div style="font-size: 10px; color: #848e9c; margin-top: 2px;">Win/Loss Gross</div>
+            </div>
+            <div style="background: linear-gradient(135deg, rgba(24, 29, 40, 0.95), rgba(19, 23, 34, 0.95)); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.25);">
+                <div style="font-size: 11px; font-weight: 700; color: #848e9c; text-transform: uppercase;">Avg Win / Loss</div>
+                <div style="font-size: 15px; font-weight: 700; color: #ffffff; margin-top: 6px;">+₹{avg_win:,.0f} / <span style="color:#f23645;">-₹{abs(avg_loss):,.0f}</span></div>
+                <div style="font-size: 10px; color: #848e9c; margin-top: 2px;">R:R ~ {rr_str}</div>
+            </div>
+            <div style="background: linear-gradient(135deg, rgba(24, 29, 40, 0.95), rgba(19, 23, 34, 0.95)); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.25);">
+                <div style="font-size: 11px; font-weight: 700; color: #848e9c; text-transform: uppercase;">Max Drawdown</div>
+                <div style="font-size: 22px; font-weight: 800; color: #f23645; margin-top: 4px;">₹{max_dd:,.2f}</div>
+                <div style="font-size: 10px; color: #848e9c; margin-top: 2px;">Peak-to-Trough</div>
+            </div>
+        </div>
+        """
+        st.markdown(card_html, unsafe_allow_html=True)
+
+        # Cumulative P&L Equity Curve
+        if trades_list:
+            df_chart = pd.DataFrame(trades_list)
+            pnl_col = "net_pnl" if "net_pnl" in df_chart.columns else "pnl"
+            df_chart[pnl_col] = pd.to_numeric(df_chart[pnl_col], errors="coerce").fillna(0.0)
+            df_chart["Cumulative Net P&L (₹)"] = df_chart[pnl_col].cumsum()
+            df_chart["Trade #"] = range(1, len(df_chart) + 1)
+
+            st.markdown("### 📈 Cumulative Equity Curve")
+            st.line_chart(df_chart.set_index("Trade #")["Cumulative Net P&L (₹)"], color="#089981" if pnl_val >= 0 else "#f23645")
+
+            # Trade Details Table
+            st.markdown(f"### 📜 {selected_strat} Detailed Trade Ledger")
+            
+            # Formatting dataframe for clean display
+            display_cols = ["trade_id", "date", "side", "entry_time", "exit_time", "entry_premium", "exit_premium", "reason", "breakeven_triggered", "net_pnl", "mode"]
+            existing_cols = [c for c in display_cols if c in df_chart.columns]
+            df_display = df_chart[existing_cols].copy()
+
+            # Renaming for friendly view
+            col_rename = {
+                "trade_id": "Trade ID",
+                "date": "Date",
+                "side": "Side",
+                "entry_time": "Entry",
+                "exit_time": "Exit",
+                "entry_premium": "Buy (₹)",
+                "exit_premium": "Sell (₹)",
+                "reason": "Exit Reason",
+                "breakeven_triggered": "Breakeven Lock",
+                "net_pnl": "Net P&L (₹)",
+                "mode": "Mode"
+            }
+            df_display = df_display.rename(columns=col_rename)
+
+            # Styling helpers
+            def color_pnl(val):
+                try:
+                    v = float(val)
+                    if v > 0:
+                        return 'color: #089981; font-weight: bold;'
+                    elif v < 0:
+                        return 'color: #f23645; font-weight: bold;'
+                    return 'color: #848e9c;'
+                except Exception:
+                    return ''
+
+            st.dataframe(
+                df_display.style.map(color_pnl, subset=["Net P&L (₹)"]),
+                use_container_width=True,
+                height=350
+            )
+
+            # Export Button
+            csv_data = df_chart.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Strategy Ledger (CSV)",
+                data=csv_data,
+                file_name=f"{strat_key}_trade_ledger.csv",
+                mime="text/csv",
+                use_container_width=False
+            )
+        else:
+            st.info(f"ℹ️ No trades recorded yet in the live `{strat_key}_ledger.json` file. Tomorrow's live paper session trades will automatically appear here.")
+            st.caption("Tip: Switch the Data Source toggle above to '📊 6-Month Backtest Benchmark' to view the 34 historical baseline trades.")
+
+        st.divider()
+
+    # ======================================================================
+    # TAB 3: S/R Level Trader (Dual-Asset: NIFTY 50 & CRUDE OIL)
     # ======================================================================
     with tab_levels:
         st.subheader("🎯 Dual-Asset Support & Resistance Level Trader")

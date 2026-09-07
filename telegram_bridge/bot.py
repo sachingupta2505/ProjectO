@@ -684,6 +684,15 @@ class TelegramBridge:
         if not open_pos and not closed_pos:
             return f"ℹ️ No active positions or trades recorded ({source_tag})."
 
+        # Load active strategy trade telemetry (Target, SL, Trailing status)
+        active_trades_meta = {}
+        try:
+            at_path = PROJECT_ROOT / "logs" / "active_trades.json"
+            if at_path.exists():
+                active_trades_meta = json.loads(at_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
         lines = [f"📊 <b>Positions & Trades Overview ({source_tag}):</b>\n"]
         if open_pos:
             lines.append("🟢 <b>Active Open Positions:</b>")
@@ -691,10 +700,45 @@ class TelegramBridge:
                 pnl_icon = "🟢" if p.total_pnl >= 0 else "🔴"
                 avg_p = p.average_sell_price if p.quantity < 0 else p.average_buy_price
                 side = "SELL" if p.quantity < 0 else "BUY"
+                sym = p.instrument.symbol
+
+                # Match active trade metadata for target and SL
+                trade_meta = None
+                for k, v in active_trades_meta.items():
+                    if v.get("symbol") == sym or k in sym:
+                        trade_meta = v
+                        break
+
+                meta_lines = ""
+                if trade_meta:
+                    tp = trade_meta.get("target_price", 0.0)
+                    sl = trade_meta.get("sl_price", 0.0)
+                    be_locked = trade_meta.get("breakeven_locked", False)
+                    trail_act = trade_meta.get("trailing_active", False)
+
+                    if trail_act:
+                        sl_status = "📈 Trailing Active (Ratcheting behind peak)"
+                    elif be_locked:
+                        sl_status = "🛡️ Breakeven Locked (Zero Capital Risk)"
+                    else:
+                        sl_status = "🛑 Initial Invalidation Stop"
+
+                    is_short = (side == "SELL")
+                    tp_pts = (avg_p - tp) if is_short else (tp - avg_p)
+                    sl_pts = (sl - avg_p) if is_short else (avg_p - sl)
+                    qty_abs = abs(p.quantity)
+
+                    meta_lines = (
+                        f"  🎯 <b>Target:</b> ₹{tp:,.2f} (+{tp_pts:.1f} pts | +₹{tp_pts * qty_abs:,.2f})\n"
+                        f"  🛑 <b>Stop Loss:</b> ₹{sl:,.2f} (-{sl_pts:.1f} pts | -₹{sl_pts * qty_abs:,.2f})\n"
+                        f"  🛡️ <b>Trailing State:</b> {sl_status}\n"
+                    )
+
                 lines.append(
-                    f"• <b>{p.instrument.symbol}</b>\n"
-                    f"  Qty: {abs(p.quantity)} ({side}) | Avg: ₹{avg_p:.2f} | LTP: ₹{p.ltp:.2f}\n"
-                    f"  Unrealized: {pnl_icon} ₹{p.unrealized_pnl:+,.2f} (Total: ₹{p.total_pnl:+,.2f})\n"
+                    f"• <b>{sym}</b>\n"
+                    f"  Qty: {abs(p.quantity)} ({side}) | Entry Avg: ₹{avg_p:,.2f} | LTP: ₹{p.ltp:,.2f}\n"
+                    f"{meta_lines}"
+                    f"  Unrealized PnL: {pnl_icon} <b>₹{p.unrealized_pnl:+,.2f}</b> (Net Total: ₹{p.total_pnl:+,.2f})\n"
                 )
         else:
             lines.append("ℹ️ <i>No open active positions. All positions flat.</i>\n")
@@ -722,6 +766,27 @@ class TelegramBridge:
         if not trades:
             return f"📖 <b>Official Trade Book ({source_tag})</b>\n\nNo trade fills executed in this session."
 
+        # Load active trades and closed trade autopsy ledger for Target/SL enrichment
+        active_trades_meta = {}
+        ledger_meta = {}
+        try:
+            at_path = PROJECT_ROOT / "logs" / "active_trades.json"
+            if at_path.exists():
+                active_trades_meta = json.loads(at_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+        try:
+            ll_path = PROJECT_ROOT / "logs" / "trade_learning_ledger.json"
+            if ll_path.exists():
+                for r in json.loads(ll_path.read_text(encoding="utf-8")):
+                    if "trade_id" in r:
+                        ledger_meta[r["trade_id"]] = r
+                    if "symbol" in r:
+                        ledger_meta[r["symbol"]] = r
+        except Exception:
+            pass
+
         lines = [f"📖 <b>Official Executed Trade Book ({source_tag})</b>\n"]
         for i, t in enumerate(trades, 1):
             ts = t.get("timestamp", "")
@@ -734,9 +799,21 @@ class TelegramBridge:
             charges = t.get("charges", 0.0)
             tag = t.get("tag", "")
 
+            # Check if this trade is currently active or in ledger
+            meta_info = ""
+            for k, v in active_trades_meta.items():
+                if v.get("symbol") == sym or k in sym:
+                    meta_info = f"   🎯 Target: ₹{v.get('target_price', 0):,.2f} | 🛑 SL: ₹{v.get('sl_price', 0):,.2f}\n"
+                    break
+
+            if not meta_info and sym in ledger_meta:
+                rec = ledger_meta[sym]
+                meta_info = f"   🏁 Result: {rec.get('exit_reason', '')[:45]} | Net: ₹{rec.get('net_pnl', 0):+,.2f}\n"
+
             lines.append(
                 f"{side_icon} <b>#{i} {side} {qty}x {sym}</b> @ ₹{price:,.2f}\n"
                 f"   ⏰ Time: {time_str} | Charges: ₹{charges:.2f}\n"
+                f"{meta_info}"
                 f"   🏷️ Tag: <code>{tag or 'MANUAL'}</code>\n"
             )
 

@@ -36,6 +36,10 @@ INTERVAL_MAP = {
 
 TOKEN_MAP = {
     "NIFTY": {"exchange": "NSE", "token": "99926000", "market_start": "09:15", "market_end": "15:30"},
+    "BANKNIFTY": {"exchange": "NSE", "token": "99926009", "market_start": "09:15", "market_end": "15:30"},
+    "FINNIFTY": {"exchange": "NSE", "token": "99926037", "market_start": "09:15", "market_end": "15:30"},
+    "MIDCPNIFTY": {"exchange": "NSE", "token": "99926074", "market_start": "09:15", "market_end": "15:30"},
+    "SENSEX": {"exchange": "BSE", "token": "99919000", "market_start": "09:15", "market_end": "15:30"},
     "CRUDEOIL": {"exchange": "MCX", "token": "565900", "market_start": "09:00", "market_end": "23:30"}
 }
 

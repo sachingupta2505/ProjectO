@@ -370,6 +370,8 @@ class TelegramBridge:
                 return self._cmd_trade_crude("LONG", [])
             elif any(w in lower for w in ["sell", "short"]):
                 return self._cmd_trade_crude("SHORT", [])
+            elif any(w in lower for w in ["level", "support", "resistance", "zone"]):
+                return self._cmd_levels(["crude"])
             return self._cmd_crude()
 
         if any(w in lower for w in ["trading at", "nifty price", "nifty spot", "market quote", "banknifty", "vix", "index", "bhav", "nifty kitna"]):
@@ -396,7 +398,10 @@ class TelegramBridge:
 
         # 2d. Support & Resistance Levels
         if any(w in lower for w in ["levels", "support", "resistance", "zone", "sr level"]):
-            return self._cmd_levels()
+            args = ["crude"] if any(c in lower for c in ["crude", "oil", "mcx"]) else []
+            if any(n in lower for n in ["nifty", "nse"]):
+                args = ["nifty"]
+            return self._cmd_levels(args)
 
         # 3. PnL / Balance / Financials
         if any(w in lower for w in ["pnl", "profit", "loss", "balance", "margin", "kamai", "kitna", "rupees", "cash", "portfolio", "net worth"]):
@@ -1098,12 +1103,22 @@ class TelegramBridge:
             from core.level_models import load_levels_config
             from core.market_data import get_live_nifty_spot, get_live_crude_spot
 
-            is_crude = bool(args and any("CRUDE" in a.upper() for a in args))
+            req_text = " ".join(args).upper() if args else ""
+            is_crude = any(w in req_text for w in ["CRUDE", "OIL", "MCX"])
+            is_nifty = any(w in req_text for w in ["NIFTY", "NSE"])
+
+            # Smart Session Routing: If not explicitly requested, check current market session
+            if not is_crude and not is_nifty:
+                now_t = datetime.now().time()
+                # NSE closes at 15:30 IST. From 15:30 to 23:30 IST, MCX Crude is the only active market
+                if now_t >= datetime.strptime("15:30:00", "%H:%M:%S").time() or now_t < datetime.strptime("09:15:00", "%H:%M:%S").time():
+                    is_crude = True
+
             if is_crude:
                 crude = get_live_crude_spot()
                 spot = float(crude.get("spot", 8700.0))
                 lvls = load_levels_config("CRUDEOIL")
-                title = "🛢️ <b>CRUDE OIL Key Support & Resistance Levels</b>\n"
+                title = "🛢️ <b>CRUDE OIL Key Support & Resistance Levels (MCX Active)</b>\n"
                 pts_label = "pts"
             else:
                 spot_data = get_live_nifty_spot()

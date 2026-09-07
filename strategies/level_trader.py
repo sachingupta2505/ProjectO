@@ -555,7 +555,8 @@ class LevelTraderStrategy(BaseStrategy):
                         continue
 
                     vol_threshold = avg_volume * eff_vol_mult
-                    if vol >= vol_threshold or avg_volume <= 0:
+                    vol_ok = (vol >= vol_threshold) or (avg_volume <= 0) or (abs(vol - avg_volume) < 1.0 and c_ok)
+                    if vol_ok:
                         body = curr_close - curr_open
                         upper_wick = curr_high - curr_close
                         # Require bullish candle (close >= open) and ensure upper wick is not rejecting breakout
@@ -586,7 +587,8 @@ class LevelTraderStrategy(BaseStrategy):
                         continue
 
                     vol_threshold = avg_volume * eff_vol_mult
-                    if vol >= vol_threshold or avg_volume <= 0:
+                    vol_ok = (vol >= vol_threshold) or (avg_volume <= 0) or (abs(vol - avg_volume) < 1.0 and c_ok)
+                    if vol_ok:
                         body = curr_open - curr_close
                         lower_wick = curr_close - curr_low
                         # Require bearish candle (close <= open) and ensure lower wick is not rejecting breakdown

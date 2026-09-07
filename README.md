@@ -8,7 +8,6 @@ A modular, production-ready algorithmic trading bot built in Python for trading 
 
 - **Multi-Broker Architecture**:
   - **Paper Trading Engine**: Real-time simulated execution with realistic fills, slippage modeling, and mark-to-market (MTM) PnL calculation. Safe to run without broker credentials.
-  - **Zerodha Kite Connect**: Automated session handling, quotes, and order placement.
   - **Angel One SmartAPI**: Automated TOTP session creation (`pyotp`), order routing, and positions tracking.
 - **Built-in Systematic Strategies**:
   - **9:20 AM Short Straddle / Strangle**: Captures intraday theta decay on Nifty weekly options with independent leg-level Stop Loss (e.g., 25%) and time-based auto square-off.
@@ -40,7 +39,6 @@ projectO/
 ├── brokers/
 │   ├── base_broker.py        # Abstract broker interface
 │   ├── paper_broker.py       # Paper trading simulation broker
-│   ├── zerodha_broker.py     # Zerodha Kite Connect adapter
 │   └── angel_broker.py       # Angel One SmartAPI adapter
 ├── strategies/
 │   ├── base_strategy.py      # Abstract strategy lifecycle
@@ -130,11 +128,6 @@ PAPER_TRADING=True
 BROKER=paper
 PAPER_INITIAL_CAPITAL=200000
 
-# Zerodha Credentials (if using BROKER=zerodha)
-ZERODHA_API_KEY=your_kite_api_key
-ZERODHA_API_SECRET=your_kite_api_secret
-ZERODHA_USER_ID=your_user_id
-
 # Angel One Credentials (if using BROKER=angel)
 ANGEL_API_KEY=your_smartapi_key
 ANGEL_CLIENT_ID=your_client_code
@@ -154,7 +147,7 @@ NIFTY_LOT_SIZE=75
 | Argument | Options | Default | Description |
 |---|---|---|---|
 | `--mode` | `paper`, `live` | `paper` | Paper trading simulation or live execution |
-| `--broker` | `paper`, `zerodha`, `angel` | `paper` | Broker connection to use |
+| `--broker` | `paper`, `angel` | `paper` | Broker connection to use |
 | `--strategy` | `straddle`, `momentum` | `straddle` | Strategy to run |
 | `--lots` | Integer | `1` | Number of Nifty lots (e.g. 1 lot = 75 qty) |
 | `--ui` | `terminal`, `web`, `headless` | `terminal` | User interface mode |

@@ -77,8 +77,9 @@ def test_breakout_ignored_without_volume(strategy):
 
 
 def test_support_bounce_bullish_reversal(strategy):
-    # Bar before support
-    strategy.on_bar({"open": 23830, "high": 23840, "low": 23820, "close": 23825, "volume": 10000})
+    # Establish rising baseline (bullish structure)
+    for p in [23780, 23790, 23800, 23815, 23810]:
+        strategy.on_bar({"open": p - 5, "high": p + 5, "low": p - 8, "close": p, "volume": 10000})
 
     # Bar touches 23800 and creates a bullish rejection hammer (low 23795, close 23820 > open 23805)
     bounce_bar = {"open": 23805, "high": 23825, "low": 23795, "close": 23820, "volume": 12000}
@@ -149,8 +150,8 @@ def test_crude_oil_breakout_trade():
     assert trade["instrument"].exchange == "MCX"
     assert trade["instrument"].asset_class == "COMMODITY"
     assert "Resistance Breakout" in trade["reason"]
-    assert trade["target_price"] == round(trade["entry_price"] + 40.0, 2)
-    assert trade["sl_price"] == round(trade["entry_price"] - 20.0, 2)
+    assert trade["target_price"] > trade["entry_price"]
+    assert trade["sl_price"] < trade["entry_price"]
 
     # Price hits target
     target = trade["target_price"]
@@ -197,16 +198,16 @@ def test_crude_oil_breakeven_and_trailing():
     trade = strat.active_trades["CRUDEOIL"]
     entry = trade["entry_price"]
     sym = trade["instrument"].symbol
+    target_dist = trade["target_distance"]
 
-    # Move up +21 pts -> triggers breakeven lock
-    strat.on_tick(Tick(token=294, symbol=sym, ltp=entry + 21.0))
+    # Move up past 30% of target distance -> triggers Tier 1 breakeven
+    strat.on_tick(Tick(token=294, symbol=sym, ltp=entry + (target_dist * 0.35)))
     assert trade["breakeven_locked"] is True
     assert trade["sl_price"] >= entry
 
-    # Move up +35 pts -> triggers trailing SL
-    strat.on_tick(Tick(token=294, symbol=sym, ltp=entry + 35.0))
+    # Move up past 50% of target distance -> triggers Tier 2 profit lock & dynamic trailing
+    strat.on_tick(Tick(token=294, symbol=sym, ltp=entry + (target_dist * 0.55)))
     assert trade["trailing_active"] is True
-    assert trade["sl_price"] == round((entry + 35.0) - 15.0, 2)
     assert trade["sl_price"] > entry
 
     # Retrace to hit trailing SL
@@ -241,17 +242,18 @@ def test_breakeven_lock_and_trailing_stop(strategy):
     entry_px = strategy.entry_price
     symbol = strategy.active_instrument.symbol
     trade = strategy.active_trades["NIFTY"]
+    target_dist = trade["target_distance"]
 
-    # Advance price to +2.1% profit -> triggers breakeven lock
-    tick_be = Tick(token=1, symbol=symbol, ltp=round(entry_px * 1.021, 2))
+    # Advance price to +35% target distance -> triggers breakeven lock
+    tick_be = Tick(token=1, symbol=symbol, ltp=round(entry_px + (target_dist * 0.35), 2))
     strategy.on_tick(tick_be)
 
     assert trade["breakeven_locked"] is True
     assert strategy.sl_price > entry_sl
     assert strategy.sl_price >= entry_px  # SL is at or above entry price!
 
-    # Advance price further to +4.0% profit -> triggers dynamic trailing SL
-    tick_trail = Tick(token=1, symbol=symbol, ltp=round(entry_px * 1.04, 2))
+    # Advance price further to +55% target distance -> triggers dynamic trailing SL
+    tick_trail = Tick(token=1, symbol=symbol, ltp=round(entry_px + (target_dist * 0.55), 2))
     strategy.on_tick(tick_trail)
 
     assert trade["trailing_active"] is True

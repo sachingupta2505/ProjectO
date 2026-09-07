@@ -27,6 +27,7 @@ from config.settings import settings
 from telegram_bridge.bot import TelegramBridge
 from core.charges import calculate_round_trip_charges
 from core.trade_analytics import TradeTelemetry, TradeLearningLedger, TradeAutopsy, classify_time_bucket
+from core.market_structure import MarketStructureEngine, StructureRegime
 
 logger = get_logger("LevelTrader")
 
@@ -72,6 +73,7 @@ class LevelTraderStrategy(BaseStrategy):
         self.trades_today_map: Dict[str, int] = {"NIFTY": 0, "CRUDEOIL": 0}
         self.last_trade_time_map: Dict[str, float] = {"NIFTY": 0.0, "CRUDEOIL": 0.0}
         self.level_cooldown_map: Dict[str, float] = {}
+        self.market_structure = MarketStructureEngine(ema_period=20)
 
         # Backwards compatibility state holders
         self._last_nifty_trade: Dict[str, Any] = {}
@@ -350,7 +352,11 @@ class LevelTraderStrategy(BaseStrategy):
     def on_tick(self, tick: Tick):
         """
         Monitors real-time tick price for any active positions.
-        Enforces dynamic Breakeven Lock, Trailing Stop-Loss, and Predefined Target/SL.
+        Enforces Multi-Tier Active Trade Optimization:
+          - Tier 1: Early Breakeven Lock at +30% Target Progress (Capital 100% Protected)
+          - Tier 2: Profit Lock & Dynamic Trailing at +50% Target Progress (Guarantees +25% profit)
+          - Tier 3: Stall / Reversal Early Profit-Taking at +70% to +80% Target Progress
+          - Tier 4: Theta Stagnation Guard (exits flat/decaying trades after 25 minutes)
         """
         for asset_key, trade in list(self.active_trades.items()):
             inst: Instrument = trade["instrument"]
@@ -361,134 +367,99 @@ class LevelTraderStrategy(BaseStrategy):
             entry_price = trade["entry_price"]
             side = trade["side"]
             target_price = trade["target_price"]
+            target_dist = trade.get("target_distance", abs(target_price - entry_price))
+            if target_dist <= 0:
+                target_dist = 1.0
 
-            if side == OrderSide.BUY:
+            is_long = (side == OrderSide.BUY)
+            current_gain = (current_price - entry_price) if is_long else (entry_price - current_price)
+            progress = current_gain / target_dist
+            pnl_pct = (current_gain / entry_price) * 100.0
+
+            # Track Peak and Trough prices
+            if is_long:
                 peak_price = max(trade.get("peak_price", entry_price), current_price)
-                trough_price = min(trade.get("trough_price", entry_price), current_price)
                 trade["peak_price"] = peak_price
-                trade["trough_price"] = trough_price
-                pnl_pct = ((current_price - entry_price) / entry_price) * 100.0
-
-                # 1. Breakeven Lock Trigger
-                be_threshold_reached = (
-                    (pnl_pct >= (trade.get("breakeven_pct", 0.02) * 100.0))
-                    if asset_key == "NIFTY"
-                    else ((current_price - entry_price) >= trade.get("breakeven_pts", 30.0))
-                )
-                if be_threshold_reached and not trade.get("breakeven_locked", False):
-                    be_sl = round(entry_price + 0.80, 2) if asset_key == "NIFTY" else round(entry_price + 3.5, 2)
-                    if be_sl > trade["sl_price"]:
-                        trade["sl_price"] = be_sl
-                        trade["breakeven_locked"] = True
-                        self._save_active_trades()
-                        logger.info(f"🛡️ [BREAKEVEN - {asset_key}] SL locked at ₹{be_sl:.2f} (Entry: ₹{entry_price:.2f}, covers charges)")
-                        alert_msg = (
-                            f"🛡️ <b>Breakeven Activated ({asset_key})!</b>\n\n"
-                            f"• Contract: <code>{inst.symbol}</code>\n"
-                            f"• Entry Fill: ₹{entry_price:,.2f}\n"
-                            f"• Current LTP: ₹{current_price:,.2f} ({pnl_pct:+.2f}%)\n"
-                            f"• New Stop Loss: <b>₹{be_sl:,.2f}</b> (Breakeven + Friction Buffer)\n"
-                            f"• Capital Risk: <b>₹0.00 (Charges Covered)</b>"
-                        )
-                        self.telegram.send_notification(alert_msg)
-
-                # 2. Dynamic Trailing Stop-Loss
-                trail_threshold_reached = (
-                    (peak_price >= entry_price * 1.025)
-                    if asset_key == "NIFTY"
-                    else ((peak_price - entry_price) >= max(trade.get("breakeven_pts", 20.0) + 5.0, 25.0))
-                )
-                if trail_threshold_reached:
-                    trail_dist = (
-                        round(entry_price * trade.get("trail_sl_pct", 0.015), 2)
-                        if asset_key == "NIFTY"
-                        else trade.get("trail_sl_pts", 15.0)
-                    )
-                    cand_sl = round(peak_price - trail_dist, 2)
-                    if cand_sl > trade["sl_price"]:
-                        prev_sl = trade["sl_price"]
-                        trade["sl_price"] = cand_sl
-                        trade["trailing_active"] = True
-                        self._save_active_trades()
-                        logger.info(f"📈 [TRAILING SL - {asset_key}] SL ratcheted: ₹{prev_sl:.2f} -> ₹{cand_sl:.2f} (Peak: ₹{peak_price:.2f})")
-
-                # 3. Check Target & SL Exits
-                if current_price >= target_price:
-                    self._exit_position(current_price, f"🎯 TARGET REACHED (+{pnl_pct:.2f}%)", asset_key=asset_key)
-                    return
-                elif current_price <= trade["sl_price"]:
-                    if trade.get("trailing_active"):
-                        lbl = f"📈 TRAILING STOP HIT ({pnl_pct:+.2f}% locked profit)" if pnl_pct >= 0 else f"🛑 TRAILING STOP HIT ({pnl_pct:.2f}%)"
-                    elif trade.get("breakeven_locked"):
-                        lbl = f"🛡️ BREAKEVEN STOP HIT ({pnl_pct:+.2f}%)"
-                    else:
-                        lbl = f"🛑 STOP LOSS HIT ({pnl_pct:.2f}%)"
-                    self._exit_position(current_price, lbl, asset_key=asset_key)
-                    return
-
-            else:  # Short position
+                peak_gain = peak_price - entry_price
+            else:
                 peak_price = min(trade.get("peak_price", entry_price), current_price)
-                trough_price = max(trade.get("trough_price", entry_price), current_price)
                 trade["peak_price"] = peak_price
-                trade["trough_price"] = trough_price
-                pnl_pct = ((entry_price - current_price) / entry_price) * 100.0
+                peak_gain = entry_price - peak_price
 
-                # 1. Breakeven Lock Trigger for Short
-                be_threshold_reached = (
-                    (pnl_pct >= (trade.get("breakeven_pct", 0.02) * 100.0))
-                    if asset_key == "NIFTY"
-                    else ((entry_price - current_price) >= trade.get("breakeven_pts", 30.0))
-                )
-                if be_threshold_reached and not trade.get("breakeven_locked", False):
-                    be_sl = round(entry_price - 0.80, 2) if asset_key == "NIFTY" else round(entry_price - 3.5, 2)
-                    if be_sl < trade["sl_price"]:
-                        trade["sl_price"] = be_sl
-                        trade["breakeven_locked"] = True
-                        self._save_active_trades()
-                        logger.info(f"🛡️ [BREAKEVEN - {asset_key}] Short SL locked at ₹{be_sl:.2f} (Entry: ₹{entry_price:.2f}, covers charges)")
-                        alert_msg = (
-                            f"🛡️ <b>Breakeven Activated ({asset_key})!</b>\n\n"
-                            f"• Contract: <code>{inst.symbol}</code> (SHORT)\n"
-                            f"• Entry Fill: ₹{entry_price:,.2f}\n"
-                            f"• Current LTP: ₹{current_price:,.2f} ({pnl_pct:+.2f}%)\n"
-                            f"• New Stop Loss: <b>₹{be_sl:,.2f}</b> (Breakeven + Friction Buffer)\n"
-                            f"• Capital Risk: <b>₹0.00 (Charges Covered)</b>"
-                        )
-                        self.telegram.send_notification(alert_msg)
+            peak_progress = peak_gain / target_dist
 
-                # 2. Dynamic Trailing Stop-Loss for Short
-                trail_threshold_reached = (
-                    (peak_price <= entry_price * 0.975)
-                    if asset_key == "NIFTY"
-                    else ((entry_price - peak_price) >= 35.0)
-                )
-                if trail_threshold_reached:
-                    trail_dist = (
-                        round(entry_price * trade.get("trail_sl_pct", 0.015), 2)
-                        if asset_key == "NIFTY"
-                        else trade.get("trail_sl_pts", 20.0)
+            # ----------------------------------------------------------
+            # TIER 1: Early Breakeven Lock (+30% of Target Distance)
+            # ----------------------------------------------------------
+            if progress >= 0.30 and not trade.get("breakeven_locked", False):
+                be_sl = round(entry_price + 0.80, 2) if is_long else round(entry_price - 0.80, 2)
+                should_update = (be_sl > trade["sl_price"]) if is_long else (be_sl < trade["sl_price"])
+                if should_update:
+                    trade["sl_price"] = be_sl
+                    trade["breakeven_locked"] = True
+                    self._save_active_trades()
+                    logger.info(f"🛡️ [TIER 1 BREAKEVEN - {asset_key}] Progress: {progress*100:.1f}%. SL moved to ₹{be_sl:.2f} (Entry: ₹{entry_price:.2f}). Capital 100% Protected!")
+                    self.telegram.send_notification(
+                        f"🛡️ <b>Early Breakeven Activated ({asset_key})!</b>\n\n"
+                        f"• Contract: <code>{inst.symbol}</code>\n"
+                        f"• Target Progress: <b>+{progress*100:.1f}%</b>\n"
+                        f"• Entry: ₹{entry_price:.2f} | Current: ₹{current_price:.2f}\n"
+                        f"• New Stop Loss: <b>₹{be_sl:.2f}</b> (Capital Protected)"
                     )
-                    cand_sl = round(peak_price + trail_dist, 2)
-                    if cand_sl < trade["sl_price"]:
-                        prev_sl = trade["sl_price"]
-                        trade["sl_price"] = cand_sl
-                        trade["trailing_active"] = True
-                        self._save_active_trades()
-                        logger.info(f"📈 [TRAILING SL - {asset_key}] Short SL ratcheted: ₹{prev_sl:.2f} -> ₹{cand_sl:.2f} (Trough: ₹{peak_price:.2f})")
 
-                # 3. Check Target & SL Exits for Short
-                if current_price <= target_price:
-                    self._exit_position(current_price, f"🎯 TARGET REACHED (+{pnl_pct:.2f}%)", asset_key=asset_key)
-                    return
-                elif current_price >= trade["sl_price"]:
-                    if trade.get("trailing_active"):
-                        lbl = f"📈 TRAILING STOP HIT ({pnl_pct:+.2f}% locked profit)" if pnl_pct >= 0 else f"🛑 TRAILING STOP HIT ({pnl_pct:.2f}%)"
-                    elif trade.get("breakeven_locked"):
-                        lbl = f"🛡️ BREAKEVEN STOP HIT ({pnl_pct:+.2f}%)"
-                    else:
-                        lbl = f"🛑 STOP LOSS HIT ({pnl_pct:.2f}%)"
-                    self._exit_position(current_price, lbl, asset_key=asset_key)
-                    return
+            # ----------------------------------------------------------
+            # TIER 2: Profit Lock & Dynamic Trailing (+50% of Target Distance)
+            # ----------------------------------------------------------
+            if progress >= 0.50:
+                trade["trailing_active"] = True
+                # Lock in at least 25% of the target distance as guaranteed profit!
+                guaranteed_floor = round(entry_price + (target_dist * 0.25), 2) if is_long else round(entry_price - (target_dist * 0.25), 2)
+                # Trail behind peak by 25% of target distance
+                trail_sl = round(peak_price - (target_dist * 0.25), 2) if is_long else round(peak_price + (target_dist * 0.25), 2)
+                cand_sl = max(guaranteed_floor, trail_sl) if is_long else min(guaranteed_floor, trail_sl)
+
+                should_trail = (cand_sl > trade["sl_price"]) if is_long else (cand_sl < trade["sl_price"])
+                if should_trail:
+                    prev_sl = trade["sl_price"]
+                    trade["sl_price"] = cand_sl
+                    self._save_active_trades()
+                    logger.info(f"📈 [TIER 2 PROFIT LOCK - {asset_key}] Ratcheting SL: ₹{prev_sl:.2f} ➔ ₹{cand_sl:.2f} (Peak: ₹{peak_price:.2f}, Guaranteed: +25% Target)")
+
+            # ----------------------------------------------------------
+            # TIER 3: Stall / Reversal Exit (+70% to +80% of Target)
+            # Optimize trades even if we don't make it all the way to target
+            # ----------------------------------------------------------
+            if peak_progress >= 0.70 and progress <= (peak_progress - 0.15):
+                reason_exit = f"🎯 OPTIMIZED PROFIT EXIT (+{progress*100:.0f}% Target Captured, Momentum Stalled near Level)"
+                self._exit_position(current_price, reason_exit, asset_key=asset_key)
+                return
+
+            # ----------------------------------------------------------
+            # TIER 4: Theta / Stagnation Guard (25 mins in trade without momentum)
+            # ----------------------------------------------------------
+            duration_mins = (time.time() - trade.get("entry_time", time.time())) / 60.0
+            if duration_mins >= 25.0 and progress < 0.20 and pnl_pct <= 0:
+                self._exit_position(current_price, f"⏳ THETA STAGNATION EXIT ({duration_mins:.0f}m flat in range)", asset_key=asset_key)
+                return
+
+            # ----------------------------------------------------------
+            # Check Full Target & Stop Loss Hits
+            # ----------------------------------------------------------
+            target_hit = (current_price >= target_price) if is_long else (current_price <= target_price)
+            if target_hit:
+                self._exit_position(current_price, f"🎯 FULL TARGET REACHED (+{pnl_pct:+.2f}%)", asset_key=asset_key)
+                return
+
+            sl_hit = (current_price <= trade["sl_price"]) if is_long else (current_price >= trade["sl_price"])
+            if sl_hit:
+                if trade.get("trailing_active"):
+                    lbl = f"📈 TRAILING STOP HIT ({pnl_pct:+.2f}% locked profit)" if pnl_pct >= 0 else f"🛑 TRAILING STOP HIT ({pnl_pct:.2f}%)"
+                elif trade.get("breakeven_locked"):
+                    lbl = f"🛡️ BREAKEVEN STOP HIT ({pnl_pct:+.2f}%)"
+                else:
+                    lbl = f"🛑 STOP LOSS HIT ({pnl_pct:.2f}%)"
+                self._exit_position(current_price, lbl, asset_key=asset_key)
+                return
 
     def on_bar(self, bar: Dict[str, Any]):
         """
@@ -502,6 +473,9 @@ class LevelTraderStrategy(BaseStrategy):
         if vol > 0:
             self.volume_histories[asset_key].append(vol)
         self.bar_histories[asset_key].append(bar)
+
+        # Update Market Structure engine with latest completed candle
+        self.market_structure.update_bar(bar)
 
         history = self.bar_histories[asset_key]
         if len(history) < 2:
@@ -565,6 +539,12 @@ class LevelTraderStrategy(BaseStrategy):
             if lvl.action in (LevelAction.BREAKOUT_ONLY.value, LevelAction.BOTH.value):
                 ref_price = lvl.range_high if lvl.range_high is not None else lvl.price
                 if prev_close < ref_price and curr_close > ref_price:
+                    # Enforce Market Structure Alignment (no breakout against downtrend)
+                    allowed, s_reason = self.market_structure.validate_setup_alignment("BULLISH", asset_key)
+                    if not allowed:
+                        logger.info(f"🏛️ [STRUCTURE GUARD] Breakout blocked on {lvl.name}: {s_reason}")
+                        continue
+
                     vol_threshold = avg_volume * eff_vol_mult
                     if vol >= vol_threshold or avg_volume <= 0:
                         body = curr_close - curr_open
@@ -584,6 +564,12 @@ class LevelTraderStrategy(BaseStrategy):
             if lvl.action in (LevelAction.BREAKOUT_ONLY.value, LevelAction.BOTH.value):
                 ref_price = lvl.range_low if lvl.range_low is not None else lvl.price
                 if prev_close > ref_price and curr_close < ref_price:
+                    # Enforce Market Structure Alignment (no breakdown against uptrend)
+                    allowed, s_reason = self.market_structure.validate_setup_alignment("BEARISH", asset_key)
+                    if not allowed:
+                        logger.info(f"🏛️ [STRUCTURE GUARD] Breakdown blocked on {lvl.name}: {s_reason}")
+                        continue
+
                     vol_threshold = avg_volume * eff_vol_mult
                     if vol >= vol_threshold or avg_volume <= 0:
                         body = curr_open - curr_close
@@ -608,6 +594,12 @@ class LevelTraderStrategy(BaseStrategy):
                 min_wick = 3.0 if asset_key == "NIFTY" else 8.0
 
                 if curr_low <= (ref_high + tolerance) and curr_close > curr_open and curr_close >= ref_low:
+                    # Enforce Market Structure Alignment (no buying calls into strong downtrend)
+                    allowed, s_reason = self.market_structure.validate_setup_alignment("BULLISH", asset_key)
+                    if not allowed:
+                        logger.info(f"🏛️ [STRUCTURE GUARD] Support bounce blocked on {lvl.name}: {s_reason}")
+                        continue
+
                     lower_wick = min(curr_open, curr_close) - curr_low
                     body = curr_close - curr_open
                     # Require confirmed bullish rejection candle with conviction and volume support
@@ -627,6 +619,12 @@ class LevelTraderStrategy(BaseStrategy):
                 min_wick = 3.0 if asset_key == "NIFTY" else 8.0
 
                 if curr_high >= (ref_low - tolerance) and curr_close < curr_open and curr_close <= ref_high:
+                    # Enforce Market Structure Alignment (no shorting into strong uptrend)
+                    allowed, s_reason = self.market_structure.validate_setup_alignment("BEARISH", asset_key)
+                    if not allowed:
+                        logger.info(f"🏛️ [STRUCTURE GUARD] Resistance rejection blocked on {lvl.name}: {s_reason}")
+                        continue
+
                     upper_wick = curr_high - max(curr_open, curr_close)
                     body = curr_open - curr_close
                     # Require confirmed bearish rejection candle with conviction and volume support
@@ -645,15 +643,46 @@ class LevelTraderStrategy(BaseStrategy):
             spot = spot_data.get("spot", 23950.0)
             atm_strike = get_atm_strike(spot)
 
+            # 1. Determine Chart-Level Structural Target & SL from actual levels
+            active_nifty_lvls = [l for l in self.levels if l.is_active and l.symbol.upper() == "NIFTY"]
+            if option_type == OptionType.CE:
+                # Bullish (Call): Target is the next overhead resistance level
+                res_above = [l for l in active_nifty_lvls if l.price > (spot + 8.0)]
+                target_level = min(res_above, key=lambda x: x.price) if res_above else None
+                spot_target_pts = (target_level.price - spot) if target_level else getattr(level, "target_spot_pts", 40.0)
+                spot_target_pts = max(30.0, min(85.0, spot_target_pts))
+
+                # Structural SL is placed below the level support floor / zone low (+5.0 buffer)
+                ref_low = level.range_low if level.range_low is not None else level.price
+                invalidation = ref_low - 5.0
+                spot_sl_pts = max(10.0, min(25.0, spot - invalidation))
+            else:
+                # Bearish (Put): Target is the next underlying support level
+                sup_below = [l for l in active_nifty_lvls if l.price < (spot - 8.0)]
+                target_level = max(sup_below, key=lambda x: x.price) if sup_below else None
+                spot_target_pts = (spot - target_level.price) if target_level else getattr(level, "target_spot_pts", 40.0)
+                spot_target_pts = max(30.0, min(85.0, spot_target_pts))
+
+                # Structural SL is placed above the level resistance ceiling / zone high (+5.0 buffer)
+                ref_high = level.range_high if level.range_high is not None else level.price
+                invalidation = ref_high + 5.0
+                spot_sl_pts = max(10.0, min(25.0, invalidation - spot))
+
+            # Convert Spot Points to Option Points using ATM Delta (~0.50)
+            delta = 0.50
+            opt_target_pts = round(spot_target_pts * delta, 2)
+            opt_sl_pts = round(spot_sl_pts * delta, 2)
+
+            # Strict Capital Protection: Cap per-trade risk (e.g. ₹1,800 max loss per trade)
+            lot_sz = settings.NIFTY_LOT_SIZE
+            quantity = self.lots * lot_sz
+            max_allowed_loss_pts = round(getattr(settings, "MAX_LOSS_PER_TRADE", 1800.0) / quantity, 2)
+            opt_sl_pts = min(opt_sl_pts, max_allowed_loss_pts)
+
             quote = get_live_option_quote("nifty", atm_strike, option_type.value)
             entry_price = float(quote.get("ltp", 75.0 if option_type == OptionType.PE else 105.0))
             if entry_price <= 0:
                 entry_price = 75.0
-
-            lot_sz = settings.NIFTY_LOT_SIZE
-            quantity = self.lots * lot_sz
-            target_price = round(entry_price * (1.0 + tp_pct), 2)
-            sl_price = round(entry_price * (1.0 - sl_pct), 2)
 
             expiry_str = quote.get("expiry", "2026-09-08")
             try:
@@ -662,6 +691,7 @@ class LevelTraderStrategy(BaseStrategy):
                 expiry_dt = get_next_weekly_expiry()
 
             symbol = quote.get("symbol", f"NIFTY{atm_strike}{option_type.value}")
+            target_level_name = getattr(target_level, "name", "Next Resistance" if option_type == OptionType.CE else "Next Support")
             display_name = quote.get("display_name", f"NIFTY {atm_strike} {option_type.value}")
 
             instrument = Instrument(
@@ -683,20 +713,28 @@ class LevelTraderStrategy(BaseStrategy):
             crude_lots = getattr(self, "crude_lots", None) or getattr(settings, "DEFAULT_CRUDE_LOTS", 1)
             quantity = crude_lots * lot_sz
 
-            # For Crude, trade directional Futures / CFDs or ATM
             is_bullish = (option_type == OptionType.CE)
             order_side = OrderSide.BUY if is_bullish else OrderSide.SELL
 
-            pts_target = level.target_spot_pts if level.target_spot_pts is not None else 70.0
-            pts_sl = level.sl_spot_pts if level.sl_spot_pts is not None else 35.0
-
+            active_crude_lvls = [l for l in self.levels if l.is_active and l.symbol.upper() == "CRUDEOIL"]
             if is_bullish:
-                target_price = round(entry_price + pts_target, 2)
-                sl_price = round(entry_price - pts_sl, 2)
-            else:
-                target_price = round(entry_price - pts_target, 2)
-                sl_price = round(entry_price + pts_sl, 2)
+                res_above = [l for l in active_crude_lvls if l.price > (spot + 10.0)]
+                target_level = min(res_above, key=lambda x: x.price) if res_above else None
+                pts_target = (target_level.price - spot) if target_level else getattr(level, "target_spot_pts", 50.0)
+                pts_target = max(35.0, min(90.0, pts_target))
 
+                ref_low = level.range_low if level.range_low is not None else level.price
+                pts_sl = max(15.0, min(30.0, spot - (ref_low - 10.0)))
+            else:
+                sup_below = [l for l in active_crude_lvls if l.price < (spot - 10.0)]
+                target_level = max(sup_below, key=lambda x: x.price) if sup_below else None
+                pts_target = (spot - target_level.price) if target_level else getattr(level, "target_spot_pts", 50.0)
+                pts_target = max(35.0, min(90.0, pts_target))
+
+                ref_high = level.range_high if level.range_high is not None else level.price
+                pts_sl = max(15.0, min(30.0, (ref_high + 10.0) - spot))
+
+            target_level_name = getattr(target_level, "name", "Next Crude S/R Level")
             symbol = f"CRUDEOIL_{datetime.now().strftime('%b').upper()}FUT"
             display_name = f"CRUDE OIL {symbol} ({'LONG' if is_bullish else 'SHORT'})"
 
@@ -727,10 +765,10 @@ class LevelTraderStrategy(BaseStrategy):
         placed = self.broker.place_order(order)
         fill_price = placed.average_price or entry_price
 
-        # Calibrate target & stop-loss precisely from actual fill price
+        # Calibrate targets from actual fill price
         if asset_key == "NIFTY":
-            target_price = round(fill_price * (1.0 + tp_pct), 2)
-            sl_price = round(fill_price * (1.0 - sl_pct), 2)
+            target_price = round(fill_price + opt_target_pts, 2)
+            sl_price = round(fill_price - opt_sl_pts, 2)
         else:
             if is_bullish:
                 target_price = round(fill_price + pts_target, 2)
@@ -754,6 +792,9 @@ class LevelTraderStrategy(BaseStrategy):
             "target_price": target_price,
             "sl_price": sl_price,
             "initial_sl": sl_price,
+            "target_distance": round(abs(target_price - fill_price), 2),
+            "target_level_name": target_level_name,
+            "spot_entry": spot,
             "peak_price": fill_price,
             "trough_price": fill_price,
             "breakeven_locked": False,
@@ -784,7 +825,7 @@ class LevelTraderStrategy(BaseStrategy):
         sl_loss = round(abs(fill_price - sl_price) * quantity, 2)
 
         logger.info(f"⚡ [LEVEL TRADE - {asset_key}] {order_side.value} {quantity} {symbol} @ ₹{fill_price:.2f} | {reason}")
-        logger.info(f"   Target: ₹{target_price:.2f} (+₹{target_gain:.2f}) | SL: ₹{sl_price:.2f} (-₹{sl_loss:.2f})")
+        logger.info(f"   Target ({target_level_name}): ₹{target_price:.2f} (+₹{target_gain:.2f}) | SL: ₹{sl_price:.2f} (-₹{sl_loss:.2f})")
 
         rr_ratio = round(target_gain / sl_loss, 1) if sl_loss > 0 else 2.0
         alert_msg = (
@@ -794,11 +835,11 @@ class LevelTraderStrategy(BaseStrategy):
             f"• <b>Spot Reference:</b> ₹{spot:,.2f}\n"
             f"• <b>Position:</b> {order_side.value} {quantity} Qty ({self.lots} Lot)\n"
             f"• <b>Entry Price:</b> ₹{fill_price:.2f} (Value: ₹{fill_price * quantity:,.2f})\n\n"
-            f"🎯 <b>Target:</b> ₹{target_price:.2f} (+₹{target_gain:,.2f})\n"
-            f"🛑 <b>Initial Stop Loss:</b> ₹{sl_price:.2f} (-₹{sl_loss:,.2f})\n"
+            f"🎯 <b>Target ({target_level_name}):</b> ₹{target_price:.2f} (+₹{target_gain:,.2f})\n"
+            f"🛑 <b>Structural Stop Loss:</b> ₹{sl_price:.2f} (-₹{sl_loss:,.2f})\n"
             f"⚖️ <b>Risk:Reward:</b> 1:{rr_ratio}\n"
-            f"🛡️ <b>Protection:</b> Auto-Breakeven Lock & Dynamic Trailing SL Active\n\n"
-            f"🛡️ <i>Daily Guardrails Active: Max Target +₹{getattr(settings, 'MAX_DAILY_PROFIT', 10000.0):,.0f} | Max SL -₹{getattr(settings, 'MAX_DAILY_LOSS', 5000.0):,.0f}</i>"
+            f"🛡️ <b>Protection:</b> Multi-Tier Active Management (BE @ +30%, Trail @ +50%, Stall Exit @ +70%)\n\n"
+            f"🛡️ <i>Daily Guardrails: Target +₹{getattr(settings, 'MAX_DAILY_PROFIT', 11000.0):,.0f} (5.5%) | Max Loss -₹{getattr(settings, 'MAX_DAILY_LOSS', 6000.0):,.0f} (3.0%)</i>"
         )
         self.telegram.send_notification(alert_msg)
 

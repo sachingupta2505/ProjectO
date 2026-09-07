@@ -69,10 +69,10 @@ class Settings:
     CRUDE_STRIKE_STEP: int = 50
     CRUDE_SLIPPAGE_PCT: float = 0.0003
 
-    # Risk Management Settings (RMS) - Strict ₹10,000 Target & ₹5,000 Max Daily Loss
-    MAX_DAILY_LOSS: float = float(os.getenv("MAX_DAILY_LOSS", "5000.0"))
-    MAX_DAILY_PROFIT: float = float(os.getenv("MAX_DAILY_PROFIT", "10000.0"))
-    MAX_LOSS_PER_TRADE: float = float(os.getenv("MAX_LOSS_PER_TRADE", "800.0"))
+    # Risk Management Settings (RMS) - 5-6% Capital Target (₹11,000) & 3% Capped Loss (₹6,000)
+    MAX_DAILY_LOSS: float = float(os.getenv("MAX_DAILY_LOSS", "6000.0"))      # 3.0% capped loss of ₹200k capital
+    MAX_DAILY_PROFIT: float = float(os.getenv("MAX_DAILY_PROFIT", "11000.0"))  # 5.5% target of ₹200k capital
+    MAX_LOSS_PER_TRADE: float = float(os.getenv("MAX_LOSS_PER_TRADE", "1800.0"))  # 0.9% risk per trade
     TRAILING_STOP_LOSS: bool = True
     TRAILING_STEP_POINTS: float = 5.0
     TRAILING_MOVE_POINTS: float = 5.0
@@ -88,14 +88,6 @@ class Settings:
     MOMENTUM_EMA_SLOW: int = 21
     MOMENTUM_SL_POINTS: float = 20.0
     MOMENTUM_TARGET_POINTS: float = 40.0
-
-    # Zerodha Credentials
-    ZERODHA_API_KEY: str = os.getenv("ZERODHA_API_KEY", "")
-    ZERODHA_API_SECRET: str = os.getenv("ZERODHA_API_SECRET", "")
-    ZERODHA_USER_ID: str = os.getenv("ZERODHA_USER_ID", "")
-    ZERODHA_PASSWORD: str = os.getenv("ZERODHA_PASSWORD", "")
-    ZERODHA_TOTP_KEY: str = os.getenv("ZERODHA_TOTP_KEY", "")
-
     # Angel One Credentials
     ANGEL_API_KEY: str = os.getenv("ANGEL_API_KEY", "")
     ANGEL_API_SECRET: str = os.getenv("ANGEL_API_SECRET", "")

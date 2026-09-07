@@ -59,7 +59,7 @@ def format_nifty_symbol(
     is_monthly: bool = False
 ) -> str:
     """
-    Format standard NSE / Zerodha Kite option symbol:
+    Format standard NSE option symbol:
     Monthly example: NIFTY24SEP24500CE
     Weekly example:  NIFTY2490524500CE (Year 24, Month 9 -> '9', Day 05)
                      For Oct/Nov/Dec weekly: O, N, D are used for month code.

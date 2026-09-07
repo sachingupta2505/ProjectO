@@ -37,17 +37,17 @@ def test_leg_stop_loss_calculation():
 
 
 def test_rms_daily_limits():
-    # Test default settings (₹10,000 Target & ₹5,000 Stop Loss)
+    # Test default settings (₹11,000 Target & ₹6,000 Stop Loss)
     rms = RiskManager()
-    assert rms.max_daily_loss == 5000.0
-    assert rms.max_daily_profit == 10000.0
+    assert rms.max_daily_loss == 6000.0
+    assert rms.max_daily_profit == 11000.0
 
     # PnL within bounds
     breached, _ = rms.evaluate_daily_pnl(3000.0)
     assert not breached
 
-    # Max Loss breached (-5,000)
-    breached, reason = rms.evaluate_daily_pnl(-5050.0)
+    # Max Loss breached (-6,000)
+    breached, reason = rms.evaluate_daily_pnl(-6050.0)
     assert breached
     assert rms.kill_switch_active
     assert "Max Daily Loss" in reason

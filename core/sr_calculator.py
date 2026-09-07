@@ -59,7 +59,8 @@ def calculate_pivot_levels(
     high: float,
     low: float,
     close: float,
-    timeframe: str = "daily"
+    timeframe: str = "daily",
+    prefix: Optional[str] = None
 ) -> List[TradingLevel]:
     """
     Computes institutional pivot levels across timeframes (Daily, Weekly, Monthly):
@@ -70,7 +71,7 @@ def calculate_pivot_levels(
     """
     sym = symbol.upper()
     is_nifty = "NIFTY" in sym
-    tf = timeframe.lower()
+    tf = (prefix or timeframe).lower()
     tf_label = tf.capitalize()
 
     # Timeframe-calibrated Target & SL points
@@ -80,7 +81,7 @@ def calculate_pivot_levels(
     elif tf == "monthly":
         target_spot = 150.0 if is_nifty else 200.0
         sl_spot = 60.0 if is_nifty else 80.0
-    else:  # daily
+    else:  # daily or test
         target_spot = 40.0 if is_nifty else 70.0
         sl_spot = 20.0 if is_nifty else 35.0
 
@@ -102,16 +103,22 @@ def calculate_pivot_levels(
     h4 = close + (diff * 1.1 / 2.0)
     l4 = close - (diff * 1.1 / 2.0)
 
-    # Period High/Low naming
+    # Period High/Low naming and IDs
     if tf == "weekly":
         h_name = f"{sym} Previous Week High (PWH)"
         l_name = f"{sym} Previous Week Low (PWL)"
+        h_id = f"{sym.lower()}_pwh_{tf}"
+        l_id = f"{sym.lower()}_pwl_{tf}"
     elif tf == "monthly":
         h_name = f"{sym} Previous Month High (PMH)"
         l_name = f"{sym} Previous Month Low (PML)"
+        h_id = f"{sym.lower()}_pmh_{tf}"
+        l_id = f"{sym.lower()}_pml_{tf}"
     else:
         h_name = f"{sym} Previous Day High (PDH)"
         l_name = f"{sym} Previous Day Low (PDL)"
+        h_id = f"{sym.lower()}_pdh_{tf}"
+        l_id = f"{sym.lower()}_pdl_{tf}"
 
     levels: List[TradingLevel] = [
         # CPR
@@ -129,7 +136,7 @@ def calculate_pivot_levels(
         ),
         # Period High
         TradingLevel(
-            id=f"{sym.lower()}_ph_{tf}",
+            id=h_id,
             name=h_name,
             price=round(high, 2),
             level_type=LevelType.RESISTANCE.value,
@@ -140,7 +147,7 @@ def calculate_pivot_levels(
         ),
         # Period Low
         TradingLevel(
-            id=f"{sym.lower()}_pl_{tf}",
+            id=l_id,
             name=l_name,
             price=round(low, 2),
             level_type=LevelType.SUPPORT.value,
@@ -173,8 +180,8 @@ def calculate_pivot_levels(
         ),
     ]
 
-    # Add R2/S2 and Camarilla H4/L4 for Daily and Weekly
-    if tf in ("daily", "weekly"):
+    # Add R2/S2 and Camarilla H4/L4 for Daily, Weekly, and test prefixes
+    if tf in ("daily", "weekly", "test"):
         levels.extend([
             TradingLevel(
                 id=f"{sym.lower()}_r2_{tf}",

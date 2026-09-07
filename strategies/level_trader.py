@@ -712,37 +712,76 @@ class LevelTraderStrategy(BaseStrategy):
             opt_target_pts = round(spot_target_pts * delta, 2)
             opt_sl_pts = round(spot_sl_pts * delta, 2)
 
-            # Strict Capital Protection: Cap per-trade risk (e.g. ₹1,800 max loss per trade)
+            # Strict Capital Protection: Cap per-trade risk (calibrated for deployed capital)
             lot_sz = settings.NIFTY_LOT_SIZE
             quantity = self.lots * lot_sz
-            max_allowed_loss_pts = round(getattr(settings, "MAX_LOSS_PER_TRADE", 1800.0) / quantity, 2)
+            max_allowed_loss_pts = round(getattr(settings, "MAX_LOSS_PER_TRADE", 4500.0) / quantity, 2)
             opt_sl_pts = min(opt_sl_pts, max_allowed_loss_pts)
 
-            quote = get_live_option_quote("nifty", atm_strike, option_type.value)
-            entry_price = float(quote.get("ltp", 75.0 if option_type == OptionType.PE else 105.0))
-            if entry_price <= 0:
-                entry_price = 75.0
-
-            expiry_str = quote.get("expiry", "2026-09-08")
+            expiry_str = "2026-09-08"
             try:
-                expiry_dt = datetime.strptime(expiry_str, "%Y-%m-%d").date()
-            except Exception:
                 expiry_dt = get_next_weekly_expiry()
+            except Exception:
+                expiry_dt = datetime.now().date()
 
-            symbol = quote.get("symbol", f"NIFTY{atm_strike}{option_type.value}")
-            target_level_name = getattr(target_level, "name", "Next Resistance" if option_type == OptionType.CE else "Next Support")
-            display_name = quote.get("display_name", f"NIFTY {atm_strike} {option_type.value}")
+            # Determine Option Execution Mode: Buy vs Sell
+            opt_mode = getattr(settings, "OPTION_ACTION_MODE", "dynamic").lower()
+            is_bounce = "Bounce" in reason or "Rejection" in reason or level.action == LevelAction.BOUNCE_ONLY.value
+            should_sell_option = (opt_mode == "sell_only") or (opt_mode == "dynamic" and is_bounce)
 
-            instrument = Instrument(
-                symbol=symbol,
-                exchange="NFO",
-                strike=atm_strike,
-                expiry=expiry_dt,
-                option_type=option_type,
-                lot_size=lot_sz,
-                asset_class="INDEX"
-            )
-            order_side = OrderSide.BUY
+            if should_sell_option:
+                # Option Writing / Selling (Credit Setup):
+                # - Bullish Support Bounce -> Sell OTM Put below support (captures rich Theta decay)
+                # - Bearish Resistance Rejection -> Sell OTM Call above resistance (captures Theta decay)
+                order_side = OrderSide.SELL
+                if option_type == OptionType.CE:
+                    trade_opt_type = OptionType.PE
+                    sell_strike = atm_strike - 100
+                else:
+                    trade_opt_type = OptionType.CE
+                    sell_strike = atm_strike + 100
+
+                quote = get_live_option_quote("nifty", sell_strike, trade_opt_type.value)
+                entry_price = float(quote.get("ltp", 45.0))
+                if entry_price <= 0:
+                    entry_price = 45.0
+                symbol = quote.get("symbol", f"NIFTY{sell_strike}{trade_opt_type.value}")
+                target_level_name = getattr(target_level, "name", "Decay Floor")
+                display_name = f"NIFTY {sell_strike} {trade_opt_type.value} [SHORT/CREDIT]"
+
+                instrument = Instrument(
+                    symbol=symbol,
+                    exchange="NFO",
+                    strike=sell_strike,
+                    expiry=expiry_dt,
+                    option_type=trade_opt_type,
+                    lot_size=lot_sz,
+                    asset_class="INDEX"
+                )
+                # When selling: target is premium decay down (e.g. 70% decay), SL is 35% premium expansion
+                opt_target_pts = round(entry_price * 0.70, 2)
+                opt_sl_pts = round(min(entry_price * 0.35, max_allowed_loss_pts), 2)
+            else:
+                # Option Buying (Debit Setup on Breakouts/Breakdowns):
+                order_side = OrderSide.BUY
+                quote = get_live_option_quote("nifty", atm_strike, option_type.value)
+                entry_price = float(quote.get("ltp", 75.0 if option_type == OptionType.PE else 105.0))
+                if entry_price <= 0:
+                    entry_price = 75.0
+
+                symbol = quote.get("symbol", f"NIFTY{atm_strike}{option_type.value}")
+                target_level_name = getattr(target_level, "name", "Next Resistance" if option_type == OptionType.CE else "Next Support")
+                display_name = quote.get("display_name", f"NIFTY {atm_strike} {option_type.value}")
+
+                instrument = Instrument(
+                    symbol=symbol,
+                    exchange="NFO",
+                    strike=atm_strike,
+                    expiry=expiry_dt,
+                    option_type=option_type,
+                    lot_size=lot_sz,
+                    asset_class="INDEX"
+                )
 
         else:  # CRUDEOIL
             crude_data = get_live_crude_spot()

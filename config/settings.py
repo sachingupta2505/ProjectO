@@ -39,7 +39,7 @@ class Settings:
     # Execution Mode
     PAPER_TRADING: bool = os.getenv("PAPER_TRADING", "True").lower() in ("true", "1", "yes")
     BROKER: str = os.getenv("BROKER", "paper").lower()
-    PAPER_INITIAL_CAPITAL: float = float(os.getenv("PAPER_INITIAL_CAPITAL", "200000.0"))
+    PAPER_INITIAL_CAPITAL: float = float(os.getenv("PAPER_INITIAL_CAPITAL", "500000.0"))
 
     # Market Timing (IST format HH:MM:SS)
     MARKET_START_TIME: str = "09:15:00"
@@ -63,16 +63,19 @@ class Settings:
     DEFAULT_LOTS: int = 1        # 1 Lot = 65 Qty for NIFTY
     SLIPPAGE_PCT: float = 0.0003  # Realistic 0.03% (approx 2.5 pts on Crude, 0.5 pts on Nifty options)
 
+    # Option Mode: "dynamic" (buys on breakouts, sells on S/R bounces & high IV), "buy_only", "sell_only"
+    OPTION_ACTION_MODE: str = os.getenv("OPTION_ACTION_MODE", "dynamic")
+
     # Instrument Specifications: CRUDE OIL (MCX)
     CRUDE_NAME: str = "CRUDEOIL"
     CRUDE_TICK_SIZE: float = 1.0
     CRUDE_STRIKE_STEP: int = 50
     CRUDE_SLIPPAGE_PCT: float = 0.0003
 
-    # Risk Management Settings (RMS) - 5-6% Capital Target (₹11,000) & 3% Capped Loss (₹6,000)
-    MAX_DAILY_LOSS: float = float(os.getenv("MAX_DAILY_LOSS", "6000.0"))      # 3.0% capped loss of ₹200k capital
-    MAX_DAILY_PROFIT: float = float(os.getenv("MAX_DAILY_PROFIT", "11000.0"))  # 5.5% target of ₹200k capital
-    MAX_LOSS_PER_TRADE: float = float(os.getenv("MAX_LOSS_PER_TRADE", "1800.0"))  # 0.9% risk per trade
+    # Risk Management Settings (RMS) - 5-6% Capital Target (₹27,500) & 3% Capped Loss (₹15,000) on ₹5 Lakhs
+    MAX_DAILY_LOSS: float = float(os.getenv("MAX_DAILY_LOSS", "15000.0"))      # 3.0% capped loss of ₹500k capital
+    MAX_DAILY_PROFIT: float = float(os.getenv("MAX_DAILY_PROFIT", "27500.0"))  # 5.5% target of ₹500k capital
+    MAX_LOSS_PER_TRADE: float = float(os.getenv("MAX_LOSS_PER_TRADE", "4500.0"))  # 0.9% risk per trade
     TRAILING_STOP_LOSS: bool = True
     TRAILING_STEP_POINTS: float = 5.0
     TRAILING_MOVE_POINTS: float = 5.0

@@ -154,16 +154,17 @@ class OpeningRetestStrategy(BaseStrategy):
 
     def evaluate_opening_15m_candle(self, current_dt: datetime):
         """Constructs and validates the 09:15 - 09:30 AM opening candle."""
-        # Always attempt to fetch true exchange opening bars from Angel One API for exact OHLC precision
-        try:
-            from scripts.download_candles import fetch_and_save_candles
-            df_hist = fetch_and_save_candles(self.symbol, "5m", days_back=2, save_csv=False)
-            df_hist["timestamp"] = pd.to_datetime(df_hist["timestamp"])
-            today_df = df_hist[df_hist["timestamp"].dt.date == current_dt.date()].sort_values("timestamp")
-            if len(today_df) >= 3:
-                self.bars_5m = today_df.iloc[:3].to_dict("records")
-        except Exception as e:
-            logger.warning(f"Could not fetch today's opening bars via API: {e}")
+        # If bars were missed (e.g. late daemon start), fetch true exchange opening bars from Angel One API
+        if len(self.bars_5m) < 3:
+            try:
+                from scripts.download_candles import fetch_and_save_candles
+                df_hist = fetch_and_save_candles(self.symbol, "5m", days_back=2, save_csv=False)
+                df_hist["timestamp"] = pd.to_datetime(df_hist["timestamp"])
+                today_df = df_hist[df_hist["timestamp"].dt.date == current_dt.date()].sort_values("timestamp")
+                if len(today_df) >= 3:
+                    self.bars_5m = today_df.iloc[:3].to_dict("records")
+            except Exception as e:
+                logger.warning(f"Could not fetch today's opening bars via API: {e}")
 
         if len(self.bars_5m) < 3:
             logger.warning(f"Insufficient bars to construct 15m opening candle (found {len(self.bars_5m)})")

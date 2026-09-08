@@ -146,13 +146,20 @@ class TelegramBridge:
     # ------------------------------------------------------------------
 
     def send_notification(self, text: str) -> bool:
-        """Send an alert message directly to your phone via Telegram."""
-        import sys, os, json, urllib.request
+        """Send an alert message directly to your phone via Telegram.
+        HTTP 429 rate-limit errors are silently swallowed with a backoff —
+        they must NEVER propagate up and disrupt the trading engine."""
+        import sys, os, json, urllib.request, time as _time
         if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
             return False
 
         if not self.token or not self.chat_id:
             return False
+
+        # Rate-limit guard: if we were 429'd recently, wait out the cooldown silently
+        _now = _time.time()
+        if getattr(self, "_tg_rate_limit_until", 0) > _now:
+            return False  # still in cooldown — drop silently, never crash
 
         url = f"{self.api_base}/sendMessage"
         payload = {
@@ -171,6 +178,11 @@ class TelegramBridge:
             with urllib.request.urlopen(req, timeout=12) as resp:
                 return resp.status == 200
         except urllib.error.HTTPError as e:
+            if e.code == 429:
+                # Rate limited — back off for 60 seconds, log once, never crash
+                self._tg_rate_limit_until = _now + 60
+                logger.warning("Telegram rate-limited (429). Cooling down 60s. Trading continues unaffected.")
+                return False
             if e.code == 400 and payload.get("parse_mode"):
                 # Fallback: Retry as plain text if HTML tags were invalid
                 try:

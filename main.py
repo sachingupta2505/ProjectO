@@ -335,25 +335,23 @@ class TradingBotRunner:
         return nifty_spot
 
     def _send_candle_update(self, bar: Dict[str, Any], current_spot: float):
-        """Sends rich 5-minute candle completion & strategy monitoring telemetry to Telegram."""
+        """Persists 5-minute candle state for on-demand /candle queries.
+        Only sends a Telegram push when something ACTIONABLE is happening
+        (trade in progress, entry window, or retest monitoring zone)."""
         try:
-            if not self.telegram:
-                return
-
             ts = bar.get("timestamp", datetime.now())
             time_str = ts.strftime("%H:%M IST") if hasattr(ts, "strftime") else datetime.now().strftime("%H:%M IST")
             o = float(bar.get("open", current_spot))
             h = float(bar.get("high", current_spot))
             l = float(bar.get("low", current_spot))
             c = float(bar.get("close", current_spot))
-            vol = int(bar.get("volume", 0))
             chg = c - o
             chg_pct = (chg / o * 100.0) if o > 0 else 0.0
-            icon = "🟢" if chg >= 0 else "🔴"
 
             now_t = datetime.now().time()
             orion_status = ""
             theta_status = ""
+            send_telegram = False  # Only push when actionable
 
             # Check ORION-15 status
             orion_strat = None
@@ -368,24 +366,27 @@ class TradingBotRunner:
                     orion_status = f"⏳ <b>ORION-15:</b> Recording opening 15m candle ({bars_count}/3 bars complete)."
                 elif orion_strat.in_trade:
                     pnl_pts = (current_spot - orion_strat.entry_spot) if orion_strat.setup_side == "CALL" else (orion_strat.entry_spot - current_spot)
-                    pnl_rupees = pnl_pts * orion_strat.lots * 65 * 0.55  # approx delta 0.55
+                    pnl_rupees = pnl_pts * orion_strat.lots * 65 * 0.55
                     orion_status = (
                         f"🎯 <b>ORION-15 (IN TRADE):</b> {orion_strat.setup_side} ({orion_strat.opt_symbol})\n"
                         f"• Entry: ₹{orion_strat.entry_spot:.1f} | Spot: ₹{current_spot:.1f} ({pnl_pts:+.1f} pts)\n"
                         f"• Est P&L: <b>₹{pnl_rupees:+,.0f}</b>\n"
-                        f"• Target 1 (Breakeven): ₹{orion_strat.target1_spot:.1f}\n"
-                        f"• Target 2 (Take Profit): ₹{orion_strat.target2_spot:.1f}\n"
-                        f"• Invalidation SL: ₹{orion_strat.invalidation_spot:.1f}"
+                        f"• Target 1: ₹{orion_strat.target1_spot:.1f} | Target 2: ₹{orion_strat.target2_spot:.1f}\n"
+                        f"• SL: ₹{orion_strat.invalidation_spot:.1f}"
                     )
+                    send_telegram = True  # Trade active → push every 5m
                 elif orion_strat.setup_valid and not orion_strat.trade_closed_today and now_t <= dtime(11, 30):
                     zone_mid = (orion_strat.retest_min + orion_strat.retest_max) / 2.0
                     dist = current_spot - zone_mid
                     orion_status = (
-                        f"👀 <b>ORION-15:</b> Monitoring for {orion_strat.setup_side} 50% retest bounce.\n"
-                        f"• Retest Zone: <code>{orion_strat.retest_min:.1f} - {orion_strat.retest_max:.1f}</code>\n"
+                        f"👀 <b>ORION-15:</b> Monitoring {orion_strat.setup_side} 50% retest bounce.\n"
+                        f"• Retest Zone: <code>{orion_strat.retest_min:.1f} – {orion_strat.retest_max:.1f}</code>\n"
                         f"• Distance to Zone: <b>{dist:+.1f} pts</b>\n"
                         f"• Target 1: <code>{orion_strat.target1_spot:.1f}</code> | SL: <code>{orion_strat.invalidation_spot:.1f}</code>"
                     )
+                    # Only push when within 15 pts of zone
+                    if abs(dist) <= 15:
+                        send_telegram = True
                 elif orion_strat.trade_closed_today:
                     orion_status = f"✅ <b>ORION-15:</b> Trade completed today (P&L: ₹{orion_strat.daily_pnl:+,.2f})."
                 else:
@@ -402,14 +403,23 @@ class TradingBotRunner:
                 if theta_strat.in_trade:
                     theta_status = (
                         f"📉 <b>THETA-0DTE:</b> Expiry Strangle Active\n"
-                        f"• CE: {theta_strat.ce_symbol} | PE: {theta_strat.pe_symbol}"
+                        f"• CE: <code>{theta_strat.ce_symbol}</code> (SL: ₹{theta_strat.ce_sl_price:.2f})\n"
+                        f"• PE: <code>{theta_strat.pe_symbol}</code> (SL: ₹{theta_strat.pe_sl_price:.2f})\n"
+                        f"• Current P&L: ₹{theta_strat.daily_pnl:+,.2f}"
                     )
+                    send_telegram = True  # Trade active → push every 5m
+                elif theta_strat.trade_closed_today:
+                    theta_status = f"✅ <b>THETA-0DTE:</b> Trade completed today (P&L: ₹{theta_strat.daily_pnl:+,.2f})."
+                elif dtime(12, 45) <= now_t <= dtime(13, 15):
+                    theta_status = "⏳ <b>THETA-0DTE:</b> Entry window open (12:45 – 13:15 PM). Watching for entry..."
+                    send_telegram = True  # Entry window → push once per candle
                 elif now_t < dtime(12, 45):
-                    theta_status = "🕒 <b>THETA-0DTE:</b> Scheduled for Tuesday weekly expiry entry at 12:45 PM."
+                    theta_status = "🕒 <b>THETA-0DTE:</b> Scheduled for 12:45 PM."
                 else:
-                    theta_status = "⏸️ <b>THETA-0DTE:</b> Completed / Inactive."
+                    theta_status = "⏸️ <b>THETA-0DTE:</b> Inactive (window closed)."
 
-            # Persist live state to file for standalone Telegram bridge queries
+            # Always update state file (powers the /candle on-demand command)
+            icon = "🟢" if chg >= 0 else "🔴"
             try:
                 import json
                 state_data = {
@@ -424,18 +434,19 @@ class TradingBotRunner:
             except Exception:
                 pass
 
-            msg = (
-                f"📊 <b>NIFTY 5m Candle Completed [{time_str}]</b>\n\n"
-                f"• <b>OHLC:</b> O: ₹{o:,.1f} | H: ₹{h:,.1f} | L: ₹{l:,.1f} | C: ₹{c:,.1f}\n"
-                f"• <b>Candle Move:</b> {icon} <b>{chg:+,.1f} pts ({chg_pct:+.2f}%)</b>\n"
-                f"• <b>Current Spot:</b> <b>₹{current_spot:,.2f}</b>\n\n"
-                f"{orion_status}\n\n"
-                f"{theta_status}\n\n"
-                f"🛡️ <i>Active Risk Rules: Max Loss -₹4,000 | Target +₹7,000</i>"
-            )
-            self.telegram.send_notification(msg)
+            # Push to Telegram ONLY when trade is active or entry is imminent
+            if send_telegram and self.telegram:
+                msg = (
+                    f"📊 <b>NIFTY 5m [{time_str}]</b>  {icon} <b>{chg:+,.1f} pts</b>\n"
+                    f"O: ₹{o:,.1f} | H: ₹{h:,.1f} | L: ₹{l:,.1f} | C: ₹{c:,.1f}\n\n"
+                    f"{orion_status}\n\n"
+                    f"{theta_status}\n\n"
+                    f"🛡️ <i>Max Loss -₹4,000 | Target +₹7,000</i>"
+                )
+                self.telegram.send_notification(msg)
+
         except Exception as e:
-            logger.error(f"Error sending candle update to Telegram: {e}")
+            logger.error(f"Error in _send_candle_update: {e}")
 
 
 def main():

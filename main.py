@@ -57,7 +57,9 @@ class TradingBotRunner:
         self.index_symbol = index_symbol.upper()
         self.running = False
         self._rms_halted = False
-        self._market_open_alert_sent = False
+        self._market_open_alert_date = None
+        self._orion_opening_alert_date = None
+        self._orion_decision_alert_date = None
         self._last_bar_time = 0.0
         # True candle aggregation state (1-minute bars with genuine high/low tracking)
         self._nifty_bar_open: Optional[float] = None
@@ -78,7 +80,7 @@ class TradingBotRunner:
 
         # Initialize Risk Manager with strict ₹10,000 Daily Target & ₹10,000 Daily Stop Loss
         self.risk_manager = RiskManager(
-            max_daily_loss=settings.MAX_DAILY_LOSS,
+            max_daily_loss=(settings.ORION_DAILY_LOSS_LIMIT if self.strategy_type in ["orion", "opening_retest", "retest"] else settings.MAX_DAILY_LOSS),
             max_daily_profit=settings.MAX_DAILY_PROFIT
         )
 
@@ -115,6 +117,13 @@ class TradingBotRunner:
                 lots=self.lots,
                 min_body_points=min_body,
                 retest_leeway=leeway,
+                retrace_low=0.35,
+                retrace_high=0.65,
+                confirmation_body_ratio=0.15,
+                entry_cutoff="11:00",
+                version="ORION-2.0",
+                risk_per_trade=settings.ORION_RISK_PER_TRADE,
+                max_lots=settings.ORION_MAX_LOTS,
                 telegram=self.telegram
             )
         elif self.strategy_type in ["theta", "theta_0dte"]:
@@ -187,17 +196,8 @@ class TradingBotRunner:
         logger.info(f"✅ Bot started! Mode: {'PAPER' if self.is_paper else 'LIVE'} | Strategy: {self.strategy.name}")
         logger.info(f"🛡️ Daily Guardrails Active: Max Target: ₹{self.risk_manager.max_daily_profit:,.2f} | Max Loss: -₹{self.risk_manager.max_daily_loss:,.2f}")
 
-        # Startup notification
-        self.telegram.send_notification(
-            f"🚀 <b>Trading Bot Active!</b>\n\n"
-            f"• <b>Asset:</b> NIFTY 50 (NSE/NFO Options)\n"
-            f"• <b>Strategy:</b> {self.strategy.name}\n"
-            f"• <b>Mode:</b> {'PAPER' if self.is_paper else 'LIVE'}\n"
-            f"• <b>Lots:</b> {self.lots} ({self.lots * settings.NIFTY_LOT_SIZE} Qty)\n"
-            f"• <b>Daily Target:</b> +₹{self.risk_manager.max_daily_profit:,.2f}\n"
-            f"• <b>Daily Stop Loss:</b> -₹{self.risk_manager.max_daily_loss:,.2f}\n\n"
-            f"🕒 Session Timings: 09:15 to 15:15 IST"
-        )
+        # The scheduled 09:15 market-open message is the session's first bot
+        # notification. Avoid a duplicate startup push when the process restarts.
 
         if ui_mode == "terminal":
             self._run_with_terminal_ui(spot_price, simulate_ticks)
@@ -219,6 +219,7 @@ class TradingBotRunner:
     def _step_cycle(self, current_spot: float, simulate: bool) -> float:
         now = datetime.now()
         now_ts = time.time()
+        is_market_session = dtime(9, 15) <= now.time() <= dtime(15, 30)
 
         # 1. Fetch live market data for NIFTY 50
         nifty_spot = current_spot
@@ -236,22 +237,23 @@ class TradingBotRunner:
                 logger.debug(f"Nifty spot query: {e}")
 
         # Market Open (09:15 AM) Announcement
-        if not self._market_open_alert_sent and now.time() >= dtime(9, 15):
-            self._market_open_alert_sent = True
+        if is_market_session and self._market_open_alert_date != now.date():
+            self._market_open_alert_date = now.date()
             if self.telegram:
                 self.telegram.send_notification(
                     f"🔔 <b>NSE Market Open (09:15 AM IST)!</b>\n\n"
                     f"• <b>NIFTY 50 Spot:</b> <b>₹{nifty_spot:,.2f}</b>\n"
-                    f"• <b>Active Portfolio:</b> Core Duo (ORION-15 + THETA-0DTE)\n"
+                    f"• <b>Active Portfolio:</b> Core Duo (ORION-2.0 + THETA-0DTE)\n"
                     f"• <b>Allocated Capital:</b> ₹2,00,000 (Paper Mode)\n"
                     f"• <b>Lots:</b> {self.lots} (130 Qty)\n\n"
                     f"📈 <b>Current Action:</b>\n"
-                    f"ORION-15 has started tracking the 15-minute opening candle (09:15 – 09:30 AM). "
-                    f"I will post live candle updates every 5 minutes and immediate notifications on any entry/exit!"
+                    f"ORION-2.0 is tracking the verified opening candle (09:15 – 09:30 AM). "
+                    f"Your next update at 09:30 will contain the setup, entry zone, stop, and targets; "
+                    f"the dashboard will then monitor silently until the 11:00 decision summary."
                 )
 
         # 2. Feed real-time ticks & 5-minute bars to active Core Duo strategies
-        if True:
+        if is_market_session:
             # 1. Update spot tick to monitor active SL, Target 1 Breakeven, Target 2
             tick_obj = Tick(
                 token=99926000,
@@ -286,7 +288,12 @@ class TradingBotRunner:
                     "high": n_high,
                     "low": n_low,
                     "close": n_close,
-                    "volume": vol
+                    "volume": vol,
+                    # ORION verifies the opening range against Angel's completed
+                    # candles, but retaining provenance makes any discrepancy
+                    # diagnosable rather than silently trading a fallback price.
+                    "data_source": nifty_info.get("source", "unverified"),
+                    "is_live": bool(nifty_info.get("is_live", False)),
                 }
                 if hasattr(self, "multi_engine") and self.multi_engine:
                     self.multi_engine.on_bar(bar_5m)
@@ -302,19 +309,26 @@ class TradingBotRunner:
                 self._5m_bar_low = nifty_spot
 
         # 4. Check Strategy Exits & Multi-Session Square-Off
-        if hasattr(self.strategy, "check_exit_conditions"):
+        if hasattr(self, "multi_engine") and self.multi_engine:
+            self.multi_engine.check_exit_conditions(now)
+        elif hasattr(self.strategy, "check_exit_conditions"):
             self.strategy.check_exit_conditions(now)
 
         # 5. Evaluate RMS Daily Target (+₹10k) and Daily Stop Loss (-₹5k)
-        margins = self.broker.get_margins()
+        margins = (
+            self.multi_engine.get_portfolio_status()
+            if hasattr(self, "multi_engine") and self.multi_engine
+            else self.broker.get_margins()
+        )
         day_pnl = margins.get("daily_pnl", margins.get("total_pnl", 0.0))
         breached, reason = self.risk_manager.evaluate_daily_pnl(day_pnl)
         if breached and not self._rms_halted:
             self._rms_halted = True
             self.running = False
-            self.broker.square_off_all_positions()
-            if isinstance(self.strategy, LevelTraderStrategy):
-                self.strategy.active_trades.clear()
+            if hasattr(self, "multi_engine") and self.multi_engine:
+                self.multi_engine.square_off_all_positions()
+            else:
+                self.broker.square_off_all_positions()
 
             is_profit = day_pnl >= 0
             alert_header = "🎉 <b>DAILY PROFIT TARGET ACHIEVED!</b>" if is_profit else "🛑 <b>DAILY STOP-LOSS LIMIT HIT!</b>"
@@ -336,8 +350,8 @@ class TradingBotRunner:
 
     def _send_candle_update(self, bar: Dict[str, Any], current_spot: float):
         """Persists 5-minute candle state for on-demand /candle queries.
-        Only sends a Telegram push when something ACTIONABLE is happening
-        (trade in progress, entry window, or retest monitoring zone)."""
+        Telegram pushes follow the concise ORION schedule: 09:15, 09:30, and
+        11:00. The dashboard and /candle command retain continuous visibility."""
         try:
             ts = bar.get("timestamp", datetime.now())
             time_str = ts.strftime("%H:%M IST") if hasattr(ts, "strftime") else datetime.now().strftime("%H:%M IST")
@@ -351,7 +365,6 @@ class TradingBotRunner:
             now_t = datetime.now().time()
             orion_status = ""
             theta_status = ""
-            send_telegram = False  # Only push when actionable
 
             # Check ORION-15 status
             orion_strat = None
@@ -374,19 +387,15 @@ class TradingBotRunner:
                         f"• Target 1: ₹{orion_strat.target1_spot:.1f} | Target 2: ₹{orion_strat.target2_spot:.1f}\n"
                         f"• SL: ₹{orion_strat.invalidation_spot:.1f}"
                     )
-                    send_telegram = True  # Trade active → push every 5m
-                elif orion_strat.setup_valid and not orion_strat.trade_closed_today and now_t <= dtime(11, 30):
+                elif orion_strat.setup_valid and not orion_strat.trade_closed_today and now_t <= orion_strat.entry_cutoff:
                     zone_mid = (orion_strat.retest_min + orion_strat.retest_max) / 2.0
                     dist = current_spot - zone_mid
                     orion_status = (
-                        f"👀 <b>ORION-15:</b> Monitoring {orion_strat.setup_side} 50% retest bounce.\n"
+                        f"👀 <b>ORION-2.0:</b> Monitoring {orion_strat.setup_side} retest bounce.\n"
                         f"• Retest Zone: <code>{orion_strat.retest_min:.1f} – {orion_strat.retest_max:.1f}</code>\n"
                         f"• Distance to Zone: <b>{dist:+.1f} pts</b>\n"
                         f"• Target 1: <code>{orion_strat.target1_spot:.1f}</code> | SL: <code>{orion_strat.invalidation_spot:.1f}</code>"
                     )
-                    # Only push when within 15 pts of zone
-                    if abs(dist) <= 15:
-                        send_telegram = True
                 elif orion_strat.trade_closed_today:
                     orion_status = f"✅ <b>ORION-15:</b> Trade completed today (P&L: ₹{orion_strat.daily_pnl:+,.2f})."
                 else:
@@ -407,12 +416,10 @@ class TradingBotRunner:
                         f"• PE: <code>{theta_strat.pe_symbol}</code> (SL: ₹{theta_strat.pe_sl_price:.2f})\n"
                         f"• Current P&L: ₹{theta_strat.daily_pnl:+,.2f}"
                     )
-                    send_telegram = True  # Trade active → push every 5m
                 elif theta_strat.trade_closed_today:
                     theta_status = f"✅ <b>THETA-0DTE:</b> Trade completed today (P&L: ₹{theta_strat.daily_pnl:+,.2f})."
                 elif dtime(12, 45) <= now_t <= dtime(13, 15):
                     theta_status = "⏳ <b>THETA-0DTE:</b> Entry window open (12:45 – 13:15 PM). Watching for entry..."
-                    send_telegram = True  # Entry window → push once per candle
                 elif now_t < dtime(12, 45):
                     theta_status = "🕒 <b>THETA-0DTE:</b> Scheduled for 12:45 PM."
                 else:
@@ -434,19 +441,62 @@ class TradingBotRunner:
             except Exception:
                 pass
 
-            # Push to Telegram ONLY when trade is active or entry is imminent
-            if send_telegram and self.telegram:
-                msg = (
-                    f"📊 <b>NIFTY 5m [{time_str}]</b>  {icon} <b>{chg:+,.1f} pts</b>\n"
-                    f"O: ₹{o:,.1f} | H: ₹{h:,.1f} | L: ₹{l:,.1f} | C: ₹{c:,.1f}\n\n"
-                    f"{orion_status}\n\n"
-                    f"{theta_status}\n\n"
-                    f"🛡️ <i>Max Loss -₹4,000 | Target +₹7,000</i>"
-                )
-                self.telegram.send_notification(msg)
+            self._send_orion_scheduled_alerts(orion_strat, ts)
 
         except Exception as e:
             logger.error(f"Error in _send_candle_update: {e}")
+
+    def _send_orion_scheduled_alerts(self, orion_strat, timestamp: datetime):
+        """Send the two planned ORION decision alerts, once per trading date."""
+        if not self.telegram or not orion_strat or not hasattr(timestamp, "date"):
+            return
+
+        alert_date = timestamp.date()
+        alert_time = timestamp.time()
+        if alert_time >= dtime(9, 30) and self._orion_opening_alert_date != alert_date:
+            self._orion_opening_alert_date = alert_date
+            if orion_strat.setup_valid:
+                self.telegram.send_notification(
+                    f"🎯 <b>ORION 2.0 Setup — 09:30 IST</b>\n\n"
+                    f"• Direction: <b>{orion_strat.setup_side}</b>\n"
+                    f"• Retest entry zone: <code>{orion_strat.retest_min:.1f} – {orion_strat.retest_max:.1f}</code>\n"
+                    f"• Invalidation stop: <code>{orion_strat.invalidation_spot:.1f}</code>\n"
+                    f"• Target 1: <code>{orion_strat.target1_spot:.1f}</code> | Target 2: <code>{orion_strat.target2_spot:.1f}</code>\n\n"
+                    f"The dashboard will monitor silently until the 11:00 decision summary."
+                )
+            else:
+                reason = getattr(orion_strat, "opening_decision_reason", "Opening setup did not qualify.")
+                self.telegram.send_notification(
+                    f"⚠️ <b>ORION 2.0 — No Setup at 09:30 IST</b>\n\n"
+                    f"Reason: {reason}\n\nNo trade will be considered today."
+                )
+
+        if alert_time >= dtime(11, 0) and self._orion_decision_alert_date != alert_date:
+            self._orion_decision_alert_date = alert_date
+            if orion_strat.in_trade:
+                message = (
+                    f"✅ <b>ORION 2.0 Decision — 11:00 IST</b>\n\n"
+                    f"Trade taken: <b>{orion_strat.setup_side}</b> {orion_strat.opt_symbol}\n"
+                    f"Entry spot: <code>{orion_strat.entry_spot:.1f}</code> | Current status: <b>OPEN</b>\n"
+                    f"SL: <code>{orion_strat.invalidation_spot:.1f}</code> | "
+                    f"T1: <code>{orion_strat.target1_spot:.1f}</code> | T2: <code>{orion_strat.target2_spot:.1f}</code>"
+                )
+            elif orion_strat.trade_closed_today:
+                message = (
+                    f"✅ <b>ORION 2.0 Decision — 11:00 IST</b>\n\n"
+                    f"Trade taken and closed: <b>{getattr(orion_strat, 'last_exit_reason', 'completed')}</b>\n"
+                    f"Net P&L: <b>₹{orion_strat.daily_pnl:+,.2f}</b>"
+                )
+            elif orion_strat.setup_valid:
+                message = (
+                    f"ℹ️ <b>ORION 2.0 Decision — 11:00 IST</b>\n\n"
+                    "No trade taken. The opening setup was valid, but no qualifying "
+                    "retest with directional confirmation occurred before the 11:00 cutoff."
+                )
+            else:
+                reason = getattr(orion_strat, "opening_decision_reason", "Opening setup did not qualify.")
+                message = f"ℹ️ <b>ORION 2.0 Decision — 11:00 IST</b>\n\nNo trade taken. Reason: {reason}"
+            self.telegram.send_notification(message)
 
 
 def main():

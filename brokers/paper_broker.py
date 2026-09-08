@@ -5,6 +5,8 @@ order book management, persistent disk state, and real-time MTM position trackin
 """
 
 import json
+import os
+import tempfile
 import uuid
 from pathlib import Path
 from datetime import datetime, date
@@ -43,6 +45,7 @@ class PaperBroker(BaseBroker):
             self.state_file = Path(__file__).resolve().parent.parent / "logs" / "paper_broker_state.json"
         else:
             self.state_file = Path(__file__).resolve().parent.parent / "logs" / f"paper_broker_{account_name}.json"
+        self._state_mtime_ns: Optional[int] = None
 
         if self.persist:
             self._load_state()
@@ -119,7 +122,23 @@ class PaperBroker(BaseBroker):
                 "market_prices": self.market_prices,
                 "updated_at": datetime.now().isoformat()
             }
-            self.state_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            # Dashboard and trading processes can access this file at the same
+            # time. Replacing a fully-written temporary file prevents readers
+            # from observing incomplete JSON.
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.state_file.parent,
+                prefix=f".{self.state_file.stem}_",
+                suffix=".tmp",
+                delete=False,
+            ) as temp_file:
+                temp_file.write(json.dumps(data, indent=2))
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+                temp_path = Path(temp_file.name)
+            os.replace(temp_path, self.state_file)
+            self._state_mtime_ns = self.state_file.stat().st_mtime_ns
         except Exception as e:
             logger.debug(f"Failed to persist paper broker state: {e}")
 
@@ -130,7 +149,11 @@ class PaperBroker(BaseBroker):
         try:
             if not self.state_file.exists():
                 return
+            state_mtime_ns = self.state_file.stat().st_mtime_ns
+            if self._state_mtime_ns == state_mtime_ns:
+                return
             data = json.loads(self.state_file.read_text(encoding="utf-8"))
+            self._state_mtime_ns = state_mtime_ns
             self.initial_capital = data.get("initial_capital", self.initial_capital)
             self.available_cash = data.get("available_cash", self.available_cash)
             self.total_charges = data.get("total_charges", 0.0)

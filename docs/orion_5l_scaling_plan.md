@@ -1,0 +1,39 @@
+# ORION 2.0 — ₹5 Lakh Paper Scaling Plan
+
+Status: deployed in paper mode on 8 September 2026. This plan applies to
+ORION 2.0 only; THETA-0DTE is intentionally excluded from the scaled run.
+
+## Risk limits
+
+| Control | Value |
+| --- | ---: |
+| Capital reference | ₹500,000 |
+| ORION risk budget per trade | ₹2,500 (0.5%) |
+| ORION daily loss limit | ₹5,000 (1.0%) |
+| ORION maximum position size | 2 NIFTY lots |
+| NIFTY lot size | 65 units |
+
+## Sizing rule
+
+At a qualifying entry, the bot calculates:
+
+`estimated loss per lot = max(10 option points, 0.50 × structural spot stop distance) × 65 + ₹55 charges`
+
+`lots = min(2, floor(₹2,500 / estimated loss per lot))`
+
+If one lot would exceed the risk budget, the bot skips the trade. The estimate
+is intentionally conservative because reliable option-at-stop pricing is not
+available from the current live feed. Actual option fills, spread, and
+slippage must be reviewed during paper trading.
+
+## Operating policy
+
+1. Run `main.py --strategy orion --index NIFTY --mode paper --lots 2 --no-telegram-listener`.
+2. Keep THETA disabled during the evaluation; the older Duo command applies a
+   shared lot count to both strategies.
+3. Review at least 40 additional paper ORION entries before increasing the
+   two-lot cap or enabling live execution.
+4. Stop the session after the ₹5,000 daily loss limit; do not manually add
+   size after a losing trade.
+
+This is a risk-control policy, not a promise of profitability.

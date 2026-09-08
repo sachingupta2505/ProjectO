@@ -17,17 +17,18 @@ if sys.platform == "win32":
 
 import pandas as pd
 import numpy as np
+import os
 from pathlib import Path
 
 # Load historical 5m candles
-csv_path = Path("data/historical/NIFTY_5m_180d.csv")
+csv_path = Path(os.getenv("ORION_BACKTEST_CSV", "data/historical/NIFTY_5m_180d.csv"))
 df = pd.read_csv(csv_path)
 df["timestamp"] = pd.to_datetime(df["timestamp"])
 df["date"] = df["timestamp"].dt.date
 df["time"] = df["timestamp"].dt.strftime("%H:%M")
 
 days = sorted(df["date"].unique())
-print(f"Total Trading Days in 6-Month Dataset: {len(days)}")
+print(f"Total Trading Days in Dataset: {len(days)}")
 
 LOT_SIZE = 65
 BASE_PREMIUM = 100.0  # ₹100 average ATM option price
@@ -224,7 +225,8 @@ max_dd = tdf["drawdown"].min()
 print("\n" + "=" * 60)
 print("🏆 6-MONTH STRICT BACKTEST REPORT: 15-MINUTE RETEST EDGE")
 print("=" * 60)
-print(f"Dataset Period:       {days[0]} to {days[-1]} (~6 Months)")
+period_days = (days[-1] - days[0]).days
+print(f"Dataset Period:       {days[0]} to {days[-1]} ({period_days} calendar days)")
 print(f"Contract / Lot:       NIFTY 50 Options (1 Lot = 65 Qty)")
 print(f"Average Premium:      ₹{BASE_PREMIUM:.2f} (~₹6,500 capital deployed per trade)")
 print(f"Total Trading Days:   {len(days)}")

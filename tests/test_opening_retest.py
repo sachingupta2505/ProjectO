@@ -11,7 +11,8 @@ Verifies:
 
 import pytest
 from datetime import datetime, date, time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+import pandas as pd
 
 from strategies.opening_retest_trader import OpeningRetestStrategy
 from core.models import Instrument, Order, OrderSide, OrderType, OrderStatus
@@ -105,3 +106,99 @@ def test_opening_retest_valid_bullish_setup_and_trigger(mock_setup):
     strategy.manage_active_trade(24096.0, datetime.combine(d, time(10, 30)))
     assert strategy.in_trade is False
     assert strategy.trade_closed_today is True
+
+
+def test_runtime_opening_bars_are_replaced_with_authoritative_candles(mock_setup):
+    """A stale tick-built opening range must not decide the live ORION setup."""
+    strategy, _, _ = mock_setup
+    d = date(2026, 9, 8)
+    stale_bars = [
+        {"timestamp": datetime.combine(d, time(9, 15)), "open": 23950.0, "high": 23950.0, "low": 23930.0, "close": 23940.0, "data_source": "Fallback", "is_live": False},
+        {"timestamp": datetime.combine(d, time(9, 20)), "open": 23940.0, "high": 23942.0, "low": 23925.0, "close": 23930.0, "data_source": "Fallback", "is_live": False},
+        {"timestamp": datetime.combine(d, time(9, 25)), "open": 23930.0, "high": 23935.0, "low": 23920.0, "close": 23926.8, "data_source": "Fallback", "is_live": False},
+    ]
+    authoritative = pd.DataFrame([
+        [datetime.combine(d, time(9, 15)), 23743.1, 23758.95, 23680.65, 23694.15, 0],
+        [datetime.combine(d, time(9, 20)), 23693.6, 23695.4, 23678.9, 23679.5, 0],
+        [datetime.combine(d, time(9, 25)), 23680.6, 23685.05, 23669.2, 23672.5, 0],
+    ], columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+    strategy.bars_5m = stale_bars
+    with patch("scripts.download_candles.fetch_and_save_candles", return_value=authoritative):
+        strategy.evaluate_opening_15m_candle(datetime.combine(d, time(9, 30)))
+
+    assert strategy.setup_valid is True
+    assert strategy.setup_side == "PUT"
+    assert strategy.body_15m == pytest.approx(70.6)
+    assert strategy.candle_15m["source"] == "Angel historical"
+
+
+def test_runtime_opening_bars_are_not_used_when_authoritative_fetch_fails(mock_setup):
+    strategy, _, _ = mock_setup
+    d = date(2026, 9, 8)
+    strategy.bars_5m = [
+        {"timestamp": datetime.combine(d, time(9, minute)), "open": 24000.0, "high": 24010.0, "low": 23995.0, "close": 24005.0, "data_source": "Fallback", "is_live": False}
+        for minute in (15, 20, 25)
+    ]
+
+    with patch("scripts.download_candles.fetch_and_save_candles", side_effect=RuntimeError("rate limited")):
+        strategy.evaluate_opening_15m_candle(datetime.combine(d, time(9, 30)))
+
+    assert strategy.setup_valid is False
+    assert "data_quality_error" in strategy.candle_15m
+
+
+def test_orion_20_uses_balanced_zone_and_confirmation(mock_setup):
+    _, broker, risk_manager = mock_setup
+    d = date(2026, 9, 8)
+    strategy = OpeningRetestStrategy(
+        broker=broker,
+        risk_manager=risk_manager,
+        symbol="NIFTY",
+        retrace_low=0.35,
+        retrace_high=0.65,
+        confirmation_body_ratio=0.15,
+        entry_cutoff="11:00",
+        version="ORION-2.0",
+    )
+    strategy.initialize()
+    bars = [
+        {"timestamp": datetime.combine(d, time(9, 15)), "open": 24000.0, "high": 24005.0, "low": 23990.0, "close": 23982.0, "volume": 0},
+        {"timestamp": datetime.combine(d, time(9, 20)), "open": 23982.0, "high": 23985.0, "low": 23970.0, "close": 23965.0, "volume": 0},
+        {"timestamp": datetime.combine(d, time(9, 25)), "open": 23965.0, "high": 23968.0, "low": 23945.0, "close": 23950.0, "volume": 0},
+    ]
+    for bar in bars:
+        strategy.on_bar(bar)
+    strategy.on_bar({"timestamp": datetime.combine(d, time(9, 30)), "open": 23950.0, "high": 23960.0, "low": 23948.0, "close": 23955.0, "volume": 0})
+
+    assert strategy.name == "ORION-2.0 (NIFTY)"
+    assert strategy.retest_min == pytest.approx(23967.5)
+    assert strategy.retest_max == pytest.approx(23982.5)
+
+    # Red rejection with a 10-point body clears the 7.5-point confirmation.
+    strategy.on_bar({"timestamp": datetime.combine(d, time(9, 35)), "open": 23978.0, "high": 23982.0, "low": 23965.0, "close": 23968.0, "volume": 0})
+    assert strategy.in_trade is True
+
+
+def test_stop_based_sizer_caps_orion_at_two_lots(mock_setup):
+    _, broker, risk_manager = mock_setup
+    strategy = OpeningRetestStrategy(
+        broker=broker,
+        risk_manager=risk_manager,
+        symbol="NIFTY",
+        lots=2,
+        max_lots=2,
+        risk_per_trade=2500.0,
+    )
+    strategy.initialize()
+    strategy.setup_side = "CALL"
+    strategy.invalidation_spot = 23980.0
+    now = datetime(2026, 9, 9, 10, 0)
+    with patch("strategies.opening_retest_trader.get_live_option_quote", return_value={"price": 100.0, "symbol": "NIFTY_TEST_CE", "token": "1"}):
+        strategy.execute_entry(24000.0, now)
+
+    # 20 spot points estimates to a 10-point option stop: ₹705 per lot,
+    # so the ₹2,500 budget permits more than two lots but the policy cap wins.
+    assert strategy.sized_lots == 2
+    assert strategy.estimated_loss_per_lot == 705.0
+    assert strategy.trade_order.quantity == 130

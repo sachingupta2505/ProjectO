@@ -10,8 +10,8 @@ A modular, production-ready algorithmic trading bot built in Python for trading 
   - **Paper Trading Engine**: Real-time simulated execution with realistic fills, slippage modeling, and mark-to-market (MTM) PnL calculation. Safe to run without broker credentials.
   - **Angel One SmartAPI**: Automated TOTP session creation (`pyotp`), order routing, and positions tracking.
 - **Built-in Systematic Strategies**:
-  - **9:20 AM Short Straddle / Strangle**: Captures intraday theta decay on Nifty weekly options with independent leg-level Stop Loss (e.g., 25%) and time-based auto square-off.
-  - **Directional Momentum Option Buyer**: Enters ATM Call or Put based on EMA crossovers with profit targets and dynamic ratcheting trailing stop-loss.
+  - **ORION-15 Opening Retest**: Trades a validated 15-minute opening move after a 50% retest, with defined invalidation and staged profit targets.
+  - **THETA-0DTE Decay**: Runs a time-bound expiry-day short strangle with independent leg-level stops and auto square-off.
 - **Strict Risk Management (RMS)**:
   - **Daily Circuit / Kill Switch**: Automatically halts trading and squares off open positions if cumulative loss hits the daily threshold (e.g., -₹5,000).
   - **Trailing Stop Loss (TSL)**: Automatically locks in paper profits as trades move favorably.
@@ -71,13 +71,13 @@ python backtest.py
 ```
 
 ### 3. Run the Bot in Paper Trading Mode (Terminal UI)
-Start the 9:20 Short Straddle with live simulated ticks:
+Start the combined ORION-15 and THETA-0DTE strategies with live simulated ticks:
 ```bash
-python main.py --mode paper --strategy straddle --simulate
+python main.py --mode paper --strategy duo --simulate
 ```
-To run the Momentum Option Buyer:
+To run ORION-15 alone:
 ```bash
-python main.py --mode paper --strategy momentum --simulate
+python main.py --mode paper --strategy orion --simulate
 ```
 
 ### 4. Run the Streamlit Web Dashboard
@@ -101,7 +101,7 @@ Interact with the bot from your phone:
    ```
 4. Start the bot normally:
    ```bash
-   python main.py --mode paper --broker angel --strategy straddle
+   python main.py --mode paper --broker angel --strategy duo
    ```
    Commands available on your phone:
    - `/status` — Live strategy, positions & Spot price
@@ -148,7 +148,7 @@ NIFTY_LOT_SIZE=75
 |---|---|---|---|
 | `--mode` | `paper`, `live` | `paper` | Paper trading simulation or live execution |
 | `--broker` | `paper`, `angel` | `paper` | Broker connection to use |
-| `--strategy` | `straddle`, `momentum` | `straddle` | Strategy to run |
+| `--strategy` | `duo`, `orion`, `theta` | `duo` | Strategy to run |
 | `--lots` | Integer | `1` | Number of Nifty lots (e.g. 1 lot = 75 qty) |
 | `--ui` | `terminal`, `web`, `headless` | `terminal` | User interface mode |
 | `--simulate` | Flag | `False` | Generate synthetic price ticks for testing |

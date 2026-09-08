@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 import pandas as pd
-from typing import Optional
+from typing import List, Optional, Tuple
 
 # Ensure project root is in path
 project_root = Path(__file__).resolve().parent.parent
@@ -83,24 +83,49 @@ def fetch_and_save_candles(
     api = login()
 
     now = datetime.now()
-    from_date = (now - timedelta(days=days_back)).strftime(f"%Y-%m-%d {meta['market_start']}")
-    to_date = now.strftime(f"%Y-%m-%d {meta['market_end']}")
+    start_dt = now - timedelta(days=days_back)
 
-    resp = api.getCandleData({
-        "exchange": exchange,
-        "symboltoken": token,
-        "interval": api_interval,
-        "fromdate": from_date,
-        "todate": to_date
-    })
+    # Angel limits intraday historical requests to roughly 100 calendar days.
+    # Paginate in smaller windows so callers asking for a year receive a year,
+    # rather than a silently truncated recent slice.
+    intraday_intervals = {
+        "ONE_MINUTE", "THREE_MINUTE", "FIVE_MINUTE", "TEN_MINUTE",
+        "FIFTEEN_MINUTE", "THIRTY_MINUTE", "ONE_HOUR",
+    }
+    windows: List[Tuple[datetime, datetime]] = []
+    if api_interval in intraday_intervals:
+        window_start = start_dt
+        while window_start < now:
+            window_end = min(window_start + timedelta(days=90), now)
+            windows.append((window_start, window_end))
+            window_start = window_end
+    else:
+        windows.append((start_dt, now))
 
-    raw_candles = resp.get("data", [])
+    raw_candles = []
+    for window_start, window_end in windows:
+        resp = api.getCandleData({
+            "exchange": exchange,
+            "symboltoken": token,
+            "interval": api_interval,
+            "fromdate": window_start.strftime(f"%Y-%m-%d {meta['market_start']}"),
+            "todate": window_end.strftime(f"%Y-%m-%d {meta['market_end']}"),
+        })
+        window_candles = resp.get("data", [])
+        if not window_candles:
+            logger.warning(
+                f"No candle data returned for {sym} from "
+                f"{window_start.date()} to {window_end.date()}: {resp.get('message')}"
+            )
+        raw_candles.extend(window_candles)
+
     if not raw_candles:
-        logger.warning(f"No candle data returned by Angel One for {sym} ({api_interval}). Message: {resp.get('message')}")
+        logger.warning(f"No candle data returned by Angel One for {sym} ({api_interval}).")
         return pd.DataFrame()
 
     df = pd.DataFrame(raw_candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
     df.set_index("timestamp", inplace=True)
     df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
 

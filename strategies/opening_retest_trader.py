@@ -10,6 +10,7 @@ Strictly disciplined execution:
 7. Exits full position at Target 2 or Invalidation SL, or squares off at 15:15 PM EOD.
 """
 
+import math
 import time
 import uuid
 from datetime import datetime, time as dtime
@@ -41,13 +42,37 @@ class OpeningRetestStrategy(BaseStrategy):
         lots: int = 1,
         min_body_points: float = 30.0,
         retest_leeway: float = 5.0,
+        retrace_low: float = 0.50,
+        retrace_high: float = 1.00,
+        confirmation_body_ratio: float = 0.0,
+        entry_cutoff: str = "11:30",
+        version: str = "ORION-15",
+        risk_per_trade: Optional[float] = None,
+        max_lots: Optional[int] = None,
         telegram: Optional[TelegramBridge] = None
     ):
-        super().__init__(f"ORION-15 ({symbol})", broker, risk_manager)
+        if not 0.0 <= retrace_low <= retrace_high <= 1.0:
+            raise ValueError("Retracement bounds must satisfy 0 <= low <= high <= 1")
+        if confirmation_body_ratio < 0.0:
+            raise ValueError("Confirmation body ratio cannot be negative")
+        try:
+            self.entry_cutoff = datetime.strptime(entry_cutoff, "%H:%M").time()
+        except ValueError as exc:
+            raise ValueError("Entry cutoff must use HH:MM format") from exc
+
+        super().__init__(f"{version} ({symbol})", broker, risk_manager)
         self.symbol = symbol.upper()
         self.lots = lots
         self.min_body_points = min_body_points
         self.retest_leeway = retest_leeway
+        self.retrace_low = retrace_low
+        self.retrace_high = retrace_high
+        self.confirmation_body_ratio = confirmation_body_ratio
+        self.version = version
+        self.risk_per_trade = risk_per_trade
+        self.max_lots = max_lots if max_lots is not None else lots
+        if self.max_lots < 1:
+            raise ValueError("max_lots must be at least one")
         self.telegram = telegram
 
         # State machine
@@ -80,20 +105,16 @@ class OpeningRetestStrategy(BaseStrategy):
         self.trade_closed_today: bool = False
         self.retest_window_expired: bool = False
         self.daily_pnl: float = 0.0
+        self.opening_decision_reason: str = "Opening candle has not been evaluated yet."
+        self.last_exit_reason: str = ""
+        self.sized_lots: int = 0
+        self.estimated_loss_per_lot: float = 0.0
 
     def initialize(self):
         """Set active state and prepare daily session."""
         self.is_active = True
         self.reset_daily_state()
         logger.info(f"🎯 [{self.name}] Initialized and ready for 09:15 AM market open.")
-        if self.telegram:
-            self.telegram.send_notification(
-                f"🎯 <b>15-Minute Opening Retest Strategy Initialized</b>\n"
-                f"• Asset: <b>{self.symbol}</b>\n"
-                f"• Lots: <b>{self.lots}</b>\n"
-                f"• Min Body Filter: <b>{self.min_body_points} pts</b>\n"
-                f"• Rules: Strict 09:30 AM confirmation + 50% retest + Breakeven ratchet"
-            )
 
     def on_tick(self, tick: Tick):
         """Process real-time price updates."""
@@ -143,19 +164,23 @@ class OpeningRetestStrategy(BaseStrategy):
 
         # Between 09:30 AM and 11:30 AM: Check for retest entry if setup is valid and not already in trade
         if self.setup_valid and not self.in_trade and not self.trade_closed_today:
-            if t <= dtime(11, 30):
+            if t <= self.entry_cutoff:
                 self.evaluate_retest_entry(bar, ts)
             else:
                 if not self.retest_window_expired:
                     self.retest_window_expired = True
-                    logger.info("⏳ 11:30 AM Retest window passed without confirmation. No trade today (Discipline preserved).")
-                    if self.telegram:
-                        self.telegram.send_notification("⏳ <b>Retest Window Expired (11:30 AM)</b>\nNo confirmed retest pullback occurred. No trade taken today. Capital strictly preserved.")
+                    cutoff_label = self.entry_cutoff.strftime("%H:%M")
+                    logger.info(f"⏳ {cutoff_label} AM Retest window passed without confirmation. No trade today (Discipline preserved).")
 
     def evaluate_opening_15m_candle(self, current_dt: datetime):
         """Constructs and validates the 09:15 - 09:30 AM opening candle."""
-        # If bars were missed (e.g. late daemon start), fetch true exchange opening bars from Angel One API
-        if len(self.bars_5m) < 3:
+        # Runtime bars are formed from tick data and may have started before a
+        # verified feed was available. At the decision point, replace them with
+        # completed exchange candles. Unit/backtest bars intentionally omit this
+        # marker and remain fully deterministic.
+        runtime_bars = any("data_source" in bar or "is_live" in bar for bar in self.bars_5m)
+        should_fetch_exchange_bars = runtime_bars or len(self.bars_5m) < 3
+        if should_fetch_exchange_bars:
             try:
                 from scripts.download_candles import fetch_and_save_candles
                 df_hist = fetch_and_save_candles(self.symbol, "5m", days_back=2, save_csv=False)
@@ -163,10 +188,24 @@ class OpeningRetestStrategy(BaseStrategy):
                 today_df = df_hist[df_hist["timestamp"].dt.date == current_dt.date()].sort_values("timestamp")
                 if len(today_df) >= 3:
                     self.bars_5m = today_df.iloc[:3].to_dict("records")
+                elif runtime_bars:
+                    raise RuntimeError(f"Angel returned only {len(today_df)} opening bars")
             except Exception as e:
+                if runtime_bars:
+                    # Do not fall back to locally assembled bars for a live
+                    # opening decision. A false setup is more dangerous than a
+                    # skipped setup, and this sentinel prevents retry storms.
+                    self.candle_15m = {"data_quality_error": str(e)}
+                    self.opening_decision_reason = "Verified Angel opening candles were unavailable; setup withheld for data safety."
+                    logger.error(
+                        "ORION opening setup withheld: authoritative Angel "
+                        f"candles unavailable ({e})"
+                    )
+                    return
                 logger.warning(f"Could not fetch today's opening bars via API: {e}")
 
         if len(self.bars_5m) < 3:
+            self.opening_decision_reason = "Fewer than three completed opening candles were available."
             logger.warning(f"Insufficient bars to construct 15m opening candle (found {len(self.bars_5m)})")
             return
 
@@ -180,35 +219,50 @@ class OpeningRetestStrategy(BaseStrategy):
 
         self.candle_15m = {
             "open": o15, "high": h15, "low": l15, "close": c15,
-            "body": body15, "range": range15, "is_green": is_green
+            "body": body15, "range": range15, "is_green": is_green,
+            "source": "Angel historical" if should_fetch_exchange_bars else "supplied bars",
         }
+
+        logger.info(
+            "ORION opening candle [%s]: O=%.2f H=%.2f L=%.2f C=%.2f | body=%.2f",
+            self.candle_15m["source"], o15, h15, l15, c15, body15,
+        )
 
         # Filter 1: Minimum body conviction
         if body15 < self.min_body_points:
+            self.opening_decision_reason = (
+                f"Opening body was {body15:.1f} points, below the {self.min_body_points:.1f}-point minimum."
+            )
             logger.info(f"⏭️ 15m candle body ({body15:.1f} pts) < min threshold ({self.min_body_points} pts). Skipping choppy session.")
-            if self.telegram:
-                self.telegram.send_notification(f"⚠️ <b>15m Opening Candle Choppy</b>\nBody: {body15:.1f} pts (&lt; {self.min_body_points} pts min threshold). No clear directional conviction. Standing aside today.")
             return
 
         # Filter 2: Rejection wick guard
         upper_wick = h15 - max(o15, c15)
         lower_wick = min(o15, c15) - l15
         if is_green and upper_wick > (body15 * 0.85):
+            self.opening_decision_reason = "Bullish opening candle had an excessive upper rejection wick."
             logger.info(f"⏭️ 15m Green candle rejected at top (upper wick {upper_wick:.1f} > 85% of body). Setup invalid.")
             return
         if not is_green and lower_wick > (body15 * 0.85):
+            self.opening_decision_reason = "Bearish opening candle had an excessive lower rejection wick."
             logger.info(f"⏭️ 15m Red candle rejected at bottom (lower wick {lower_wick:.1f} > 85% of body). Setup invalid.")
             return
 
         # Valid setup formed! Calculate structural levels
         self.setup_valid = True
+        self.opening_decision_reason = "Opening structure qualifies; awaiting the retest and confirmation."
         self.setup_side = "CALL" if is_green else "PUT"
         self.body_15m = body15
 
         # Retest zone (40% to 65% retracement of the opening 15m move)
-        retest_mid = o15 + (c15 - o15) * 0.50
-        self.retest_min = min(o15, retest_mid)
-        self.retest_max = max(o15, retest_mid)
+        # The defaults preserve the original deep 50%-100% retracement. ORION
+        # 2.0 uses the more selective 35%-65% continuation retracement.
+        if is_green:
+            self.retest_min = c15 - (self.retrace_high * body15)
+            self.retest_max = c15 - (self.retrace_low * body15)
+        else:
+            self.retest_min = c15 + (self.retrace_low * body15)
+            self.retest_max = c15 + (self.retrace_high * body15)
 
         if is_green:
             self.invalidation_spot = l15 - self.retest_leeway
@@ -225,18 +279,6 @@ class OpeningRetestStrategy(BaseStrategy):
             f"SL: {self.invalidation_spot:.1f} | T1: {self.target1_spot:.1f} | T2: {self.target2_spot:.1f}"
         )
 
-        if self.telegram:
-            direction_emoji = "🟢 BULLISH CALL" if is_green else "🔴 BEARISH PUT"
-            self.telegram.send_notification(
-                f"🎯 <b>15-Minute Opening Setup Formed!</b>\n"
-                f"• Direction: <b>{direction_emoji}</b>\n"
-                f"• 15m Range: <b>{l15:.1f} - {h15:.1f}</b> (Body: {body15:.1f} pts)\n"
-                f"• <b>Retest Buy Zone</b>: <code>{self.retest_min:.1f} - {self.retest_max:.1f}</code>\n"
-                f"• Target 1: <code>{self.target1_spot:.1f}</code> (Breakeven Lock)\n"
-                f"• Target 2: <code>{self.target2_spot:.1f}</code> (Final Take-Profit)\n"
-                f"• Invalidation SL: <code>{self.invalidation_spot:.1f}</code>\n\n"
-                f"<i>Monitoring for retest bounce between 09:30 AM and 11:30 AM...</i>"
-            )
 
     def evaluate_retest_entry(self, bar: Dict[str, Any], current_dt: datetime):
         """Checks if a 5m bar pulled into the retest zone and bounced."""
@@ -246,16 +288,18 @@ class OpeningRetestStrategy(BaseStrategy):
         b_open = bar["open"]
 
         triggered = False
+        confirmation_body = abs(b_close - b_open)
+        body_confirmed = confirmation_body >= (self.body_15m * self.confirmation_body_ratio)
 
         if self.setup_side == "CALL":
             # Pulled back into retest zone and printed a green bounce candle
             if b_low <= (self.retest_max + self.retest_leeway) and b_high >= self.retest_min:
-                if b_close >= b_open:
+                if b_close >= b_open and body_confirmed:
                     triggered = True
         else:
             # Rallied into retest zone and printed a red rejection candle
             if b_high >= (self.retest_min - self.retest_leeway) and b_low <= self.retest_max:
-                if b_close <= b_open:
+                if b_close <= b_open and body_confirmed:
                     triggered = True
 
         if triggered:
@@ -294,9 +338,27 @@ class OpeningRetestStrategy(BaseStrategy):
             self.opt_symbol = f"{self.symbol}{expiry_date.strftime('%y%m%d')}{self.opt_strike}{self.opt_type.value}"
             self.opt_token = "12345"
 
-        # Calculate lot quantity
+        # Calculate a stop-based quantity.  The live feed does not expose a
+        # reliable option-at-stop quote, so use a deliberately conservative
+        # delta estimate and a 10-point minimum premium stop.  If even one lot
+        # exceeds the risk budget, skip the trade rather than over-size it.
         lot_sizes = {"NIFTY": 65, "FINNIFTY": 40, "BANKNIFTY": 15, "SENSEX": 10}
-        contract_qty = lot_sizes.get(self.symbol, 65) * self.lots
+        lot_size = lot_sizes.get(self.symbol, 65)
+        structural_stop_distance = abs(current_spot - self.invalidation_spot)
+        estimated_option_stop_points = max(10.0, structural_stop_distance * 0.50)
+        self.estimated_loss_per_lot = round(estimated_option_stop_points * lot_size + 55.0, 2)
+        if self.risk_per_trade is None:
+            self.sized_lots = self.max_lots
+        else:
+            self.sized_lots = min(self.max_lots, math.floor(self.risk_per_trade / self.estimated_loss_per_lot))
+        if self.sized_lots < 1:
+            self.opening_decision_reason = (
+                f"Skipped: estimated one-lot loss of ₹{self.estimated_loss_per_lot:,.0f} exceeds "
+                f"the ₹{self.risk_per_trade:,.0f} risk budget."
+            )
+            logger.warning(self.opening_decision_reason)
+            return
+        contract_qty = lot_size * self.sized_lots
 
         # Place Order via Broker
         inst = Instrument(
@@ -323,18 +385,11 @@ class OpeningRetestStrategy(BaseStrategy):
         if placed and placed.status in [OrderStatus.PENDING, OrderStatus.OPEN, OrderStatus.FILLED]:
             self.in_trade = True
             self.trade_order = placed
-            logger.info(f"🚀 [ORDER FILLED] Bought {self.opt_symbol} @ ₹{self.entry_opt_price:.2f} (Qty: {contract_qty})")
+            logger.info(
+                f"🚀 [ORDER FILLED] Bought {self.opt_symbol} @ ₹{self.entry_opt_price:.2f} "
+                f"(Qty: {contract_qty}; {self.sized_lots} lot(s); estimated risk ₹{self.estimated_loss_per_lot * self.sized_lots:,.0f})"
+            )
 
-            if self.telegram:
-                self.telegram.send_notification(
-                    f"🚀 <b>TRADE ENTERED! (Opening Retest)</b>\n"
-                    f"• Instrument: <b>{self.opt_symbol}</b>\n"
-                    f"• Entry Premium: <b>₹{self.entry_opt_price:.2f}</b> (Spot: {current_spot:.1f})\n"
-                    f"• Quantity: <b>{contract_qty} ({self.lots} Lot)</b>\n"
-                    f"• Invalidation SL: <b>{self.invalidation_spot:.1f}</b>\n"
-                    f"• Target 1 (Breakeven Trigger): <b>{self.target1_spot:.1f}</b>\n"
-                    f"• Target 2 (Take Profit): <b>{self.target2_spot:.1f}</b>"
-                )
 
     def manage_active_trade(self, current_spot: float, current_dt: datetime):
         """Manages active trade: Breakeven Ratchet at Target 1, Exit at Target 2 or Invalidation SL."""
@@ -353,12 +408,6 @@ class OpeningRetestStrategy(BaseStrategy):
         if spot_move >= target1_dist and not self.breakeven_ratchet_done:
             self.breakeven_ratchet_done = True
             logger.info(f"🔒 [Target 1 Touched ({self.target1_spot:.1f})] Ratcheting Stop Loss to Breakeven @ Spot {self.entry_spot:.1f}!")
-            if self.telegram:
-                self.telegram.send_notification(
-                    f"🔒 <b>TARGET 1 REACHED! ({self.target1_spot:.1f})</b>\n"
-                    f"Stop Loss has been ratcheted to <b>BREAKEVEN (₹{self.entry_opt_price:.2f})</b>.\n"
-                    f"This trade is now 100% RISK-FREE. Riding towards Target 2 (<code>{self.target2_spot:.1f}</code>)."
-                )
 
         # 2. Check Target 2 Achieved (Take Profit)
         if spot_move >= target2_dist:
@@ -451,16 +500,7 @@ class OpeningRetestStrategy(BaseStrategy):
             logger.warning(f"Failed to record trade to strategy ledger: {e}")
 
         logger.info(f"🏁 [TRADE CLOSED: {reason}] PnL: ₹{net_pnl:+,.2f} (Entry: ₹{self.entry_opt_price:.2f} -> Exit: ₹{opt_exit_price:.2f})")
-
-        if self.telegram:
-            emoji = "🏆" if net_pnl > 0 else "🛑"
-            self.telegram.send_notification(
-                f"{emoji} <b>TRADE CLOSED ({reason})</b>\n"
-                f"• Instrument: <b>{self.opt_symbol}</b>\n"
-                f"• Entry: <b>₹{self.entry_opt_price:.2f}</b> | Exit: <b>₹{opt_exit_price:.2f}</b>\n"
-                f"• Net P&L: <b>₹{net_pnl:+,.2f}</b>\n"
-                f"• Today's Account P&L: <b>₹{self.daily_pnl:+,.2f}</b>"
-            )
+        self.last_exit_reason = reason
 
         self.in_trade = False
         self.trade_order = None

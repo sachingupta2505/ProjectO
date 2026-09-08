@@ -7,7 +7,6 @@ independent Risk Managers, and separate strategy ledgers.
 
 from datetime import datetime
 from typing import Dict, Any, List, Optional
-import pandas as pd
 
 from core.logger import get_logger
 from brokers.paper_broker import PaperBroker
@@ -40,6 +39,12 @@ class MultiStrategyEngine:
         self.initial_capital_per_strat = initial_capital_per_strat
         self.telegram = telegram
         self.active_keys = [k.lower() for k in active_strategies] if active_strategies else ["orion", "theta"]
+        supported_keys = {"orion", "theta"}
+        unknown_keys = set(self.active_keys) - supported_keys
+        if unknown_keys:
+            raise ValueError(f"Unsupported strategy keys: {', '.join(sorted(unknown_keys))}")
+        if not self.active_keys:
+            raise ValueError("At least one strategy must be active")
 
         # 1. Instantiate Isolated Paper Brokers for Core Duo (₹1,00,000 each)
         self.brokers: Dict[str, PaperBroker] = {
@@ -60,6 +65,11 @@ class MultiStrategyEngine:
                 risk_manager=self.risk_managers["orion"],
                 lots=self.lots,
                 symbol=self.symbol,
+                retrace_low=0.35,
+                retrace_high=0.65,
+                confirmation_body_ratio=0.15,
+                entry_cutoff="11:00",
+                version="ORION-2.0",
                 telegram=self.telegram
             ),
             "theta": ThetaDecayTraderStrategy(
@@ -70,6 +80,9 @@ class MultiStrategyEngine:
                 telegram_notifier=self.telegram
             )
         }
+        self.brokers = {key: self.brokers[key] for key in self.active_keys}
+        self.risk_managers = {key: self.risk_managers[key] for key in self.active_keys}
+        self.strategies = {key: self.strategies[key] for key in self.active_keys}
 
     def initialize(self):
         """Initializes all active brokers and strategies."""
@@ -104,12 +117,25 @@ class MultiStrategyEngine:
             except Exception as e:
                 logger.error(f"Error in {strat.name} on_bar: {e}")
 
+    def check_exit_conditions(self, current_dt: datetime) -> None:
+        """Run time-based exit checks for every active strategy."""
+        for strat in self.strategies.values():
+            check_exits = getattr(strat, "check_exit_conditions", None)
+            if check_exits:
+                check_exits(current_dt)
+
+    def square_off_all_positions(self) -> int:
+        """Flatten every active account and return the number of exit orders."""
+        return sum(len(broker.square_off_all_positions() or []) for broker in self.brokers.values())
+
     def get_portfolio_status(self) -> Dict[str, Any]:
         """Calculates combined portfolio metrics and individual strategy stats."""
+        margins = [broker.get_margins() for broker in self.brokers.values()]
         tot_capital = sum(b.initial_capital for b in self.brokers.values())
-        avail_cash = sum(b.available_cash for b in self.brokers.values())
-        tot_pnl = sum(b.get_margins()["total_pnl"] for b in self.brokers.values())
-        tot_charges = sum(b.get_margins().get("total_charges", 0.0) for b in self.brokers.values())
+        avail_cash = sum(margin["available_cash"] for margin in margins)
+        tot_pnl = sum(margin["total_pnl"] for margin in margins)
+        daily_pnl = sum(margin["daily_pnl"] for margin in margins)
+        tot_charges = sum(margin.get("total_charges", 0.0) for margin in margins)
 
         strat_statuses = {}
         for key, strat in self.strategies.items():
@@ -119,6 +145,7 @@ class MultiStrategyEngine:
             "total_capital": tot_capital,
             "available_cash": avail_cash,
             "total_pnl": tot_pnl,
+            "daily_pnl": daily_pnl,
             "total_charges": tot_charges,
             "strategies": strat_statuses
         }

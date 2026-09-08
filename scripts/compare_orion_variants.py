@@ -45,6 +45,9 @@ VARIANTS = (
 def load_sessions(csv_path: Path) -> Dict[Any, pd.DataFrame]:
     df = pd.read_csv(csv_path)
     df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+    df["ema20_prev"] = df["ema20"].shift(1)
+    df["previous_close"] = df["close"].shift(1)
     df["date"] = df["timestamp"].dt.date
     df["time"] = df["timestamp"].dt.strftime("%H:%M")
     df = df[(df["time"] >= "09:15") & (df["time"] <= "15:15")].copy()
@@ -170,6 +173,12 @@ def simulate(sessions: Iterable[pd.DataFrame], variant: Variant, lots: int = 1) 
             "side": "CALL" if is_call else "PUT",
             "entry_time": entry_bar["time"],
             "exit_reason": exit_reason,
+            "opening_range": round(opening_high - opening_low, 2),
+            "gap_points": round(opening_open - float(day_bars.iloc[0]["previous_close"]), 2),
+            "ema_aligned": bool(
+                (is_call and float(entry_bar["close"]) >= float(entry_bar["ema20"]) and float(entry_bar["ema20"]) >= float(entry_bar["ema20_prev"]))
+                or (not is_call and float(entry_bar["close"]) <= float(entry_bar["ema20"]) and float(entry_bar["ema20"]) <= float(entry_bar["ema20_prev"]))
+            ),
             "net_pnl": round((exit_price - option_entry) * LOT_SIZE * lots - ROUND_TRIP_CHARGES * lots, 2),
         })
     return trades

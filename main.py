@@ -67,7 +67,7 @@ class TradingBotRunner:
         self._5m_bar_open: Optional[float] = None
         self._5m_bar_high: float = -1e9
         self._5m_bar_low: float = 1e9
-        self._last_5m_bar_minute: int = -1
+        self._last_5m_bar_minute: int = datetime.now().minute
 
         # Initialize Telegram Bridge for mobile phone interaction
         self.telegram = TelegramBridge(

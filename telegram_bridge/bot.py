@@ -380,6 +380,10 @@ class TelegramBridge:
         if lower.strip() in ["nifty", "market"]:
             return self._cmd_market()
 
+        # 2a. Live Candle & Strategy Monitoring telemetry
+        if any(w in lower for w in ["candle", "candles", "monitoring", "what is it doing", "what are you doing", "entry point", "exit point", "setup"]):
+            return self._cmd_candle()
+
         # 2b. Option Chain
         if any(w in lower for w in ["option chain", "chain", "options", "strikes"]):
             return self._cmd_option_chain()
@@ -514,6 +518,8 @@ class TelegramBridge:
             return self._cmd_status()
         elif cmd in ("/market", "/nifty"):
             return self._cmd_market()
+        elif cmd in ("/candle", "/candles", "/monitor", "/monitoring"):
+            return self._cmd_candle()
         elif cmd in ("/options", "/chain", "/oc"):
             return self._cmd_option_chain()
         elif cmd in ("/crude", "/crudeoil", "/oil", "/buycrude", "/sellcrude", "/longcrude", "/shortcrude"):
@@ -557,11 +563,51 @@ class TelegramBridge:
         else:
             return f"❓ Unknown command: <code>{cmd}</code>\nType /help for command list or chat with me in plain English."
 
+    def _cmd_candle(self) -> str:
+        """Returns the latest 5-min candle OHLC and strategy monitoring state."""
+        try:
+            live_mon_path = Path(__file__).resolve().parent.parent / "logs" / "live_monitor.json"
+            if live_mon_path.exists():
+                import json
+                data = json.loads(live_mon_path.read_text(encoding="utf-8"))
+                bar = data.get("bar_5m", {})
+                time_str = bar.get("time", "Recent")
+                o = bar.get("open", 0.0)
+                h = bar.get("high", 0.0)
+                l = bar.get("low", 0.0)
+                c = bar.get("close", 0.0)
+                chg = bar.get("chg", 0.0)
+                chg_pct = bar.get("chg_pct", 0.0)
+                icon = "🟢" if chg >= 0 else "🔴"
+                spot = data.get("spot", c)
+
+                return (
+                    f"📊 <b>Latest NIFTY 5m Candle [{time_str}]</b>\n\n"
+                    f"• <b>OHLC:</b> O: ₹{o:,.1f} | H: ₹{h:,.1f} | L: ₹{l:,.1f} | C: ₹{c:,.1f}\n"
+                    f"• <b>Candle Move:</b> {icon} <b>{chg:+,.1f} pts ({chg_pct:+.2f}%)</b>\n"
+                    f"• <b>Current Spot:</b> <b>₹{spot:,.2f}</b>\n\n"
+                    f"{data.get('orion_status', '')}\n\n"
+                    f"{data.get('theta_status', '')}\n\n"
+                    f"<i>Updated automatically after every 5-min candle close.</i>"
+                )
+        except Exception as e:
+            logger.debug(f"Live monitor read error: {e}")
+
+        from core.market_data import get_live_nifty_spot
+        s = get_live_nifty_spot()
+        spot = float(s.get("spot", 23800.0))
+        return (
+            f"📊 <b>NIFTY 50 Live Snapshot</b>\n\n"
+            f"• <b>Current Spot:</b> <b>₹{spot:,.2f}</b>\n"
+            f"• <b>Status:</b> Market open tracking active. Next 5-min candle will post shortly!"
+        )
+
     def _cmd_help(self) -> str:
         return (
             "🤖 <b>ProjectO Assistant — Mobile Commands & Control</b>\n\n"
             "📈 <b>Live Market & Levels:</b>\n"
             "• /nifty — Real-time NSE Nifty 50, Bank Nifty & VIX\n"
+            "• /candle — Latest 5-min candle OHLC & strategy monitoring state\n"
             "• /options — Live NIFTY ATM Option Chain table\n"
             "• /levels — Marked NIFTY Support & Resistance levels & distances\n\n"
             "🎯 <b>Mobile Trading:</b>\n"
@@ -585,7 +631,7 @@ class TelegramBridge:
             "💻 <b>PC Remote Management:</b>\n"
             "• /pc — CPU, RAM, Disk & system stats\n"
             "• /cmd &lt;command&gt; — Run terminal command on your PC\n\n"
-            "💬 <i>You can also chat in plain English (e.g. 'nifty', 'pnl', 'status', 'levels')!</i>"
+            "💬 <i>You can also chat in plain English (e.g. 'candle', 'nifty', 'pnl', 'status', 'levels')!</i>"
         )
 
     def _cmd_status(self) -> str:

@@ -16,7 +16,7 @@ import argparse
 import signal
 import time
 import subprocess
-from datetime import datetime
+from datetime import datetime, time as dtime
 from typing import Optional, Dict, Any
 import numpy as np
 
@@ -57,6 +57,7 @@ class TradingBotRunner:
         self.index_symbol = index_symbol.upper()
         self.running = False
         self._rms_halted = False
+        self._market_open_alert_sent = False
         self._last_bar_time = 0.0
         # True candle aggregation state (1-minute bars with genuine high/low tracking)
         self._nifty_bar_open: Optional[float] = None
@@ -234,6 +235,21 @@ class TradingBotRunner:
             except Exception as e:
                 logger.debug(f"Nifty spot query: {e}")
 
+        # Market Open (09:15 AM) Announcement
+        if not self._market_open_alert_sent and now.time() >= dtime(9, 15):
+            self._market_open_alert_sent = True
+            if self.telegram:
+                self.telegram.send_notification(
+                    f"🔔 <b>NSE Market Open (09:15 AM IST)!</b>\n\n"
+                    f"• <b>NIFTY 50 Spot:</b> <b>₹{nifty_spot:,.2f}</b>\n"
+                    f"• <b>Active Portfolio:</b> Core Duo (ORION-15 + THETA-0DTE)\n"
+                    f"• <b>Allocated Capital:</b> ₹2,00,000 (Paper Mode)\n"
+                    f"• <b>Lots:</b> {self.lots} (130 Qty)\n\n"
+                    f"📈 <b>Current Action:</b>\n"
+                    f"ORION-15 has started tracking the 15-minute opening candle (09:15 – 09:30 AM). "
+                    f"I will post live candle updates every 5 minutes and immediate notifications on any entry/exit!"
+                )
+
         # 2. Feed real-time ticks & 5-minute bars to active Core Duo strategies
         if True:
             # 1. Update spot tick to monitor active SL, Target 1 Breakeven, Target 2
@@ -277,6 +293,9 @@ class TradingBotRunner:
                 else:
                     self.strategy.on_bar(bar_5m)
 
+                # Send live candle data & monitoring status to Telegram
+                self._send_candle_update(bar_5m, nifty_spot)
+
                 # Reset accumulator
                 self._5m_bar_open = nifty_spot
                 self._5m_bar_high = nifty_spot
@@ -314,6 +333,109 @@ class TradingBotRunner:
                 logger.debug(f"EOD review on RMS halt error: {e}")
 
         return nifty_spot
+
+    def _send_candle_update(self, bar: Dict[str, Any], current_spot: float):
+        """Sends rich 5-minute candle completion & strategy monitoring telemetry to Telegram."""
+        try:
+            if not self.telegram:
+                return
+
+            ts = bar.get("timestamp", datetime.now())
+            time_str = ts.strftime("%H:%M IST") if hasattr(ts, "strftime") else datetime.now().strftime("%H:%M IST")
+            o = float(bar.get("open", current_spot))
+            h = float(bar.get("high", current_spot))
+            l = float(bar.get("low", current_spot))
+            c = float(bar.get("close", current_spot))
+            vol = int(bar.get("volume", 0))
+            chg = c - o
+            chg_pct = (chg / o * 100.0) if o > 0 else 0.0
+            icon = "🟢" if chg >= 0 else "🔴"
+
+            now_t = datetime.now().time()
+            orion_status = ""
+            theta_status = ""
+
+            # Check ORION-15 status
+            orion_strat = None
+            if hasattr(self, "multi_engine") and self.multi_engine:
+                orion_strat = self.multi_engine.strategies.get("orion")
+            elif isinstance(self.strategy, OpeningRetestStrategy):
+                orion_strat = self.strategy
+
+            if orion_strat:
+                if now_t < dtime(9, 30):
+                    bars_count = min(3, len(orion_strat.bars_5m) + 1)
+                    orion_status = f"⏳ <b>ORION-15:</b> Recording opening 15m candle ({bars_count}/3 bars complete)."
+                elif orion_strat.in_trade:
+                    pnl_pts = (current_spot - orion_strat.entry_spot) if orion_strat.setup_side == "CALL" else (orion_strat.entry_spot - current_spot)
+                    pnl_rupees = pnl_pts * orion_strat.lots * 65 * 0.55  # approx delta 0.55
+                    orion_status = (
+                        f"🎯 <b>ORION-15 (IN TRADE):</b> {orion_strat.setup_side} ({orion_strat.opt_symbol})\n"
+                        f"• Entry: ₹{orion_strat.entry_spot:.1f} | Spot: ₹{current_spot:.1f} ({pnl_pts:+.1f} pts)\n"
+                        f"• Est P&L: <b>₹{pnl_rupees:+,.0f}</b>\n"
+                        f"• Target 1 (Breakeven): ₹{orion_strat.target1_spot:.1f}\n"
+                        f"• Target 2 (Take Profit): ₹{orion_strat.target2_spot:.1f}\n"
+                        f"• Invalidation SL: ₹{orion_strat.invalidation_spot:.1f}"
+                    )
+                elif orion_strat.setup_valid and not orion_strat.trade_closed_today and now_t <= dtime(11, 30):
+                    zone_mid = (orion_strat.retest_min + orion_strat.retest_max) / 2.0
+                    dist = current_spot - zone_mid
+                    orion_status = (
+                        f"👀 <b>ORION-15:</b> Monitoring for {orion_strat.setup_side} 50% retest bounce.\n"
+                        f"• Retest Zone: <code>{orion_strat.retest_min:.1f} - {orion_strat.retest_max:.1f}</code>\n"
+                        f"• Distance to Zone: <b>{dist:+.1f} pts</b>\n"
+                        f"• Target 1: <code>{orion_strat.target1_spot:.1f}</code> | SL: <code>{orion_strat.invalidation_spot:.1f}</code>"
+                    )
+                elif orion_strat.trade_closed_today:
+                    orion_status = f"✅ <b>ORION-15:</b> Trade completed today (P&L: ₹{orion_strat.daily_pnl:+,.2f})."
+                else:
+                    orion_status = "⏸️ <b>ORION-15:</b> Standing aside (choppy opening / window elapsed)."
+
+            # Check THETA-0DTE status
+            theta_strat = None
+            if hasattr(self, "multi_engine") and self.multi_engine:
+                theta_strat = self.multi_engine.strategies.get("theta")
+            elif isinstance(self.strategy, ThetaDecayTraderStrategy):
+                theta_strat = self.strategy
+
+            if theta_strat:
+                if theta_strat.in_trade:
+                    theta_status = (
+                        f"📉 <b>THETA-0DTE:</b> Expiry Strangle Active\n"
+                        f"• CE: {theta_strat.ce_symbol} | PE: {theta_strat.pe_symbol}"
+                    )
+                elif now_t < dtime(12, 45):
+                    theta_status = "🕒 <b>THETA-0DTE:</b> Scheduled for Tuesday weekly expiry entry at 12:45 PM."
+                else:
+                    theta_status = "⏸️ <b>THETA-0DTE:</b> Completed / Inactive."
+
+            # Persist live state to file for standalone Telegram bridge queries
+            try:
+                import json
+                state_data = {
+                    "timestamp": datetime.now().isoformat(),
+                    "spot": current_spot,
+                    "bar_5m": {"open": o, "high": h, "low": l, "close": c, "chg": chg, "chg_pct": chg_pct, "time": time_str},
+                    "orion_status": orion_status,
+                    "theta_status": theta_status
+                }
+                with open("logs/live_monitor.json", "w", encoding="utf-8") as f:
+                    json.dump(state_data, f, indent=2)
+            except Exception:
+                pass
+
+            msg = (
+                f"📊 <b>NIFTY 5m Candle Completed [{time_str}]</b>\n\n"
+                f"• <b>OHLC:</b> O: ₹{o:,.1f} | H: ₹{h:,.1f} | L: ₹{l:,.1f} | C: ₹{c:,.1f}\n"
+                f"• <b>Candle Move:</b> {icon} <b>{chg:+,.1f} pts ({chg_pct:+.2f}%)</b>\n"
+                f"• <b>Current Spot:</b> <b>₹{current_spot:,.2f}</b>\n\n"
+                f"{orion_status}\n\n"
+                f"{theta_status}\n\n"
+                f"🛡️ <i>Active Risk Rules: Max Loss -₹4,000 | Target +₹7,000</i>"
+            )
+            self.telegram.send_notification(msg)
+        except Exception as e:
+            logger.error(f"Error sending candle update to Telegram: {e}")
 
 
 def main():

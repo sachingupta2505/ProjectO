@@ -13,7 +13,7 @@ Strictly disciplined execution:
 import math
 import time
 import uuid
-from datetime import datetime, time as dtime
+from datetime import datetime, timedelta, time as dtime
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import pandas as pd
@@ -109,6 +109,9 @@ class OpeningRetestStrategy(BaseStrategy):
         self.last_exit_reason: str = ""
         self.sized_lots: int = 0
         self.estimated_loss_per_lot: float = 0.0
+        self.opening_fetch_attempts: int = 0
+        self.next_opening_fetch_retry_at: Optional[datetime] = None
+        self.opening_fetch_final_failure: bool = False
 
     def initialize(self):
         """Set active state and prepare daily session."""
@@ -159,8 +162,19 @@ class OpeningRetestStrategy(BaseStrategy):
             return
 
         # At or right after 09:30 AM: Evaluate first 15-minute candle if not evaluated yet
-        if not self.candle_15m:
+        if (
+            not self.candle_15m
+            and not self.opening_fetch_final_failure
+            and (self.next_opening_fetch_retry_at is None or ts >= self.next_opening_fetch_retry_at)
+        ):
             self.evaluate_opening_15m_candle(ts)
+
+        # The 09:30 timestamp represents the opening range decision point, not
+        # a completed post-opening confirmation candle.  Start retest entries
+        # with the next completed five-minute candle so the opening bar cannot
+        # be accidentally reused as its own confirmation.
+        if t <= dtime(9, 30):
+            return
 
         # Between 09:30 AM and 11:30 AM: Check for retest entry if setup is valid and not already in trade
         if self.setup_valid and not self.in_trade and not self.trade_closed_today:
@@ -182,6 +196,7 @@ class OpeningRetestStrategy(BaseStrategy):
         should_fetch_exchange_bars = runtime_bars or len(self.bars_5m) < 3
         if should_fetch_exchange_bars:
             try:
+                self.opening_fetch_attempts += 1
                 from scripts.download_candles import fetch_and_save_candles
                 df_hist = fetch_and_save_candles(self.symbol, "5m", days_back=2, save_csv=False)
                 df_hist["timestamp"] = pd.to_datetime(df_hist["timestamp"])
@@ -192,15 +207,21 @@ class OpeningRetestStrategy(BaseStrategy):
                     raise RuntimeError(f"Angel returned only {len(today_df)} opening bars")
             except Exception as e:
                 if runtime_bars:
-                    # Do not fall back to locally assembled bars for a live
-                    # opening decision. A false setup is more dangerous than a
-                    # skipped setup, and this sentinel prevents retry storms.
-                    self.candle_15m = {"data_quality_error": str(e)}
                     self.opening_decision_reason = "Verified Angel opening candles were unavailable; setup withheld for data safety."
-                    logger.error(
-                        "ORION opening setup withheld: authoritative Angel "
-                        f"candles unavailable ({e})"
-                    )
+                    if self.opening_fetch_attempts >= 3:
+                        self.opening_fetch_final_failure = True
+                        logger.error(
+                            "ORION opening setup withheld after three authoritative "
+                            f"Angel-candle attempts ({e})"
+                        )
+                    else:
+                        self.next_opening_fetch_retry_at = current_dt + timedelta(minutes=5)
+                        logger.warning(
+                            "ORION authoritative opening candles unavailable; retry %s/3 at %s (%s)",
+                            self.opening_fetch_attempts + 1,
+                            self.next_opening_fetch_retry_at.strftime("%H:%M"),
+                            e,
+                        )
                     return
                 logger.warning(f"Could not fetch today's opening bars via API: {e}")
 

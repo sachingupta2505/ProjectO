@@ -60,6 +60,7 @@ class TradingBotRunner:
         self._market_open_alert_date = None
         self._orion_opening_alert_date = None
         self._orion_decision_alert_date = None
+        self._bar_session_date = None
         self._last_bar_time = 0.0
         # True candle aggregation state (1-minute bars with genuine high/low tracking)
         self._nifty_bar_open: Optional[float] = None
@@ -220,6 +221,13 @@ class TradingBotRunner:
         now = datetime.now()
         now_ts = time.time()
         is_market_session = dtime(9, 15) <= now.time() <= dtime(15, 30)
+        if is_market_session and self._bar_session_date != now.date():
+            self._bar_session_date = now.date()
+            self._5m_bar_open = None
+            self._5m_bar_high = -1e9
+            self._5m_bar_low = 1e9
+            self._last_5m_bar_minute = -1
+            logger.info("New NIFTY session detected; intraday candle state reset.")
 
         # 1. Fetch live market data for NIFTY 50
         nifty_spot = current_spot
@@ -243,9 +251,9 @@ class TradingBotRunner:
                 self.telegram.send_notification(
                     f"🔔 <b>NSE Market Open (09:15 AM IST)!</b>\n\n"
                     f"• <b>NIFTY 50 Spot:</b> <b>₹{nifty_spot:,.2f}</b>\n"
-                    f"• <b>Active Portfolio:</b> Core Duo (ORION-2.0 + THETA-0DTE)\n"
-                    f"• <b>Allocated Capital:</b> ₹2,00,000 (Paper Mode)\n"
-                    f"• <b>Lots:</b> {self.lots} (130 Qty)\n\n"
+                    f"• <b>Active Strategy:</b> {self.strategy.name}\n"
+                    f"• <b>Paper Capital:</b> ₹{self.broker.initial_capital:,.0f}\n"
+                    f"• <b>Maximum Lots:</b> {self.lots} ({self.lots * settings.NIFTY_LOT_SIZE} Qty)\n\n"
                     f"📈 <b>Current Action:</b>\n"
                     f"ORION-2.0 is tracking the verified opening candle (09:15 – 09:30 AM). "
                     f"Your next update at 09:30 will contain the setup, entry zone, stop, and targets; "

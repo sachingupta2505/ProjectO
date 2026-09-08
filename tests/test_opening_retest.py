@@ -145,7 +145,9 @@ def test_runtime_opening_bars_are_not_used_when_authoritative_fetch_fails(mock_s
         strategy.evaluate_opening_15m_candle(datetime.combine(d, time(9, 30)))
 
     assert strategy.setup_valid is False
-    assert "data_quality_error" in strategy.candle_15m
+    assert strategy.candle_15m is None
+    assert strategy.opening_fetch_attempts == 1
+    assert strategy.next_opening_fetch_retry_at == datetime.combine(d, time(9, 35))
 
 
 def test_orion_20_uses_balanced_zone_and_confirmation(mock_setup):

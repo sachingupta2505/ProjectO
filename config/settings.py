@@ -67,9 +67,10 @@ class Settings:
     MAX_LOSS_PER_TRADE: float = float(os.getenv("MAX_LOSS_PER_TRADE", "4500.0"))  # 0.9% risk per trade
     # ORION 2.0 ₹5 lakh paper scaling policy.  Position size is calculated from
     # the structural stop, then capped to avoid capital-based over-sizing.
-    ORION_RISK_PER_TRADE: float = float(os.getenv("ORION_RISK_PER_TRADE", "2500.0"))
-    ORION_MAX_LOTS: int = int(os.getenv("ORION_MAX_LOTS", "2"))
-    ORION_DAILY_LOSS_LIMIT: float = float(os.getenv("ORION_DAILY_LOSS_LIMIT", "5000.0"))
+    ORION_RISK_PER_TRADE: float = float(os.getenv("ORION_RISK_PER_TRADE", "5000.0"))
+    ORION_MAX_LOTS: int = int(os.getenv("ORION_MAX_LOTS", "3"))
+    ORION_DAILY_LOSS_LIMIT: float = float(os.getenv("ORION_DAILY_LOSS_LIMIT", "10000.0"))
+    ORION_DAILY_PROFIT_LIMIT: float = float(os.getenv("ORION_DAILY_PROFIT_LIMIT", "10000.0"))
     TRAILING_STOP_LOSS: bool = True
     TRAILING_STEP_POINTS: float = 5.0
     TRAILING_MOVE_POINTS: float = 5.0

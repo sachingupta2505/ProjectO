@@ -81,7 +81,7 @@ class TradingBotRunner:
         # Initialize Risk Manager with strict ₹10,000 Daily Target & ₹10,000 Daily Stop Loss
         self.risk_manager = RiskManager(
             max_daily_loss=(settings.ORION_DAILY_LOSS_LIMIT if self.strategy_type in ["orion", "opening_retest", "retest"] else settings.MAX_DAILY_LOSS),
-            max_daily_profit=settings.MAX_DAILY_PROFIT
+            max_daily_profit=(settings.ORION_DAILY_PROFIT_LIMIT if self.strategy_type in ["orion", "opening_retest", "retest"] else settings.MAX_DAILY_PROFIT)
         )
 
         # Initialize Broker

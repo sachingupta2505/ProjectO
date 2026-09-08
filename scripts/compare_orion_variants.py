@@ -86,7 +86,7 @@ def _summary(trades: List[Dict[str, Any]]) -> Dict[str, float | int]:
     }
 
 
-def simulate(sessions: Iterable[pd.DataFrame], variant: Variant) -> List[Dict[str, Any]]:
+def simulate(sessions: Iterable[pd.DataFrame], variant: Variant, lots: int = 1) -> List[Dict[str, Any]]:
     trades: List[Dict[str, Any]] = []
     for day_bars in sessions:
         first_three = day_bars.iloc[:3]
@@ -170,7 +170,7 @@ def simulate(sessions: Iterable[pd.DataFrame], variant: Variant) -> List[Dict[st
             "side": "CALL" if is_call else "PUT",
             "entry_time": entry_bar["time"],
             "exit_reason": exit_reason,
-            "net_pnl": round((exit_price - option_entry) * LOT_SIZE - ROUND_TRIP_CHARGES, 2),
+            "net_pnl": round((exit_price - option_entry) * LOT_SIZE * lots - ROUND_TRIP_CHARGES * lots, 2),
         })
     return trades
 
@@ -178,19 +178,22 @@ def simulate(sessions: Iterable[pd.DataFrame], variant: Variant) -> List[Dict[st
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", type=Path, default=Path("data/historical/NIFTY_5m_365d.csv"))
+    parser.add_argument("--lots", type=int, default=1, help="NIFTY lots to model (must be positive)")
     args = parser.parse_args()
+    if args.lots < 1:
+        parser.error("--lots must be at least one")
     sessions = load_sessions(args.csv)
     ordered_days = sorted(sessions)
     split = int(len(ordered_days) * 0.70)
     train_days, test_days = ordered_days[:split], ordered_days[split:]
 
-    print(f"Sessions: {len(ordered_days)} | Train: {train_days[0]} to {train_days[-1]} ({len(train_days)}) | "
+    print(f"Lots: {args.lots} | Sessions: {len(ordered_days)} | Train: {train_days[0]} to {train_days[-1]} ({len(train_days)}) | "
           f"Out-of-sample: {test_days[0]} to {test_days[-1]} ({len(test_days)})")
     print("\nVariant                 Sample          Trades  Win %   Net P&L       PF    Max DD")
     print("-" * 83)
     for variant in VARIANTS:
         for sample, days in (("train", train_days), ("out-of-sample", test_days), ("full year", ordered_days)):
-            metrics = _summary(simulate((sessions[day] for day in days), variant))
+            metrics = _summary(simulate((sessions[day] for day in days), variant, args.lots))
             print(f"{variant.name:<23} {sample:<14} {metrics['trades']:>4}   {metrics['win_rate']:>5.1f}% "
                   f"Rs.{metrics['net_pnl']:>10,.2f}  {metrics['profit_factor']:>5}  Rs.{metrics['max_drawdown']:>9,.2f}")
 

@@ -30,10 +30,8 @@ from core.market_data import (
 )
 from brokers.paper_broker import PaperBroker
 from brokers.angel_broker import AngelOneBroker
-from strategies.level_trader import LevelTraderStrategy
-from strategies.short_straddle import ShortStraddleStrategy
-from strategies.momentum_buyer import MomentumBuyerStrategy
 from strategies.opening_retest_trader import OpeningRetestStrategy
+from strategies.theta_decay_trader import ThetaDecayTraderStrategy
 from dashboard.terminal_ui import render_dashboard
 from telegram_bridge.bot import TelegramBridge
 from rich.live import Live
@@ -261,82 +259,8 @@ class TradingBotRunner:
                 if "CRUDE" in sym.upper():
                     self.broker.set_ltp(sym, crude_spot)
 
-        # 2b. Feed ticks to active positions in LevelTraderStrategy
-        if isinstance(self.strategy, LevelTraderStrategy):
-            for asset_key, trade in list(self.strategy.active_trades.items()):
-                inst: Instrument = trade["instrument"]
-                if asset_key == "NIFTY":
-                    # Fetch live option quote
-                    opt_type = trade.get("option_type")
-                    strike = inst.strike or get_atm_strike(nifty_spot)
-                    if opt_type:
-                        q = get_live_option_quote("nifty", int(strike), opt_type.value)
-                        ltp = float(q.get("ltp", trade["entry_price"]))
-                        self.broker.set_ltp(inst.symbol, ltp)
-                        self.strategy.on_tick(Tick(token=1, symbol=inst.symbol, ltp=ltp, timestamp=now))
-                else:  # CRUDEOIL
-                    self.broker.set_ltp(inst.symbol, crude_spot)
-                    self.strategy.on_tick(Tick(token=294, symbol=inst.symbol, ltp=crude_spot, timestamp=now))
-
-            # 3. Accumulate real price action and feed 1-minute candle bars periodically
-            if self._nifty_bar_open is None:
-                self._nifty_bar_open = nifty_spot
-            self._nifty_bar_high = max(self._nifty_bar_high, nifty_spot)
-            self._nifty_bar_low = min(self._nifty_bar_low, nifty_spot)
-
-            if self._crude_bar_open is None:
-                self._crude_bar_open = crude_spot
-            self._crude_bar_high = max(self._crude_bar_high, crude_spot)
-            self._crude_bar_low = min(self._crude_bar_low, crude_spot)
-
-            # Emit bar every 60 seconds (or after at least 30 seconds for initial bootstrap)
-            bar_interval = 60.0
-            if (now_ts - self._last_bar_time >= bar_interval) or (self._last_bar_time == 0.0 and now_ts > 0):
-                self._last_bar_time = now_ts
-                nifty_vol = float(nifty_info.get("volume", 20000)) if nifty_info else 20000
-                crude_vol = float(crude_info.get("volume", 5000)) if crude_info else 5000
-
-                # Deliver Nifty Bar
-                if not self.risk_manager.check_time_for_square_off(now, symbol="NIFTY"):
-                    n_open = self._nifty_bar_open or nifty_spot
-                    n_close = nifty_spot
-                    n_high = max(self._nifty_bar_high, n_open, n_close)
-                    n_low = min(self._nifty_bar_low, n_open, n_close)
-                    self.strategy.on_bar({
-                        "symbol": "NIFTY",
-                        "open": n_open,
-                        "high": n_high,
-                        "low": n_low,
-                        "close": n_close,
-                        "volume": nifty_vol,
-                        "day_open": float(nifty_info.get("open", nifty_spot))
-                    })
-                    # Reset Nifty accumulator
-                    self._nifty_bar_open = nifty_spot
-                    self._nifty_bar_high = nifty_spot
-                    self._nifty_bar_low = nifty_spot
-
-                # Deliver Crude Oil Bar
-                if not self.risk_manager.check_time_for_square_off(now, symbol="CRUDEOIL"):
-                    c_open = self._crude_bar_open or crude_spot
-                    c_close = crude_spot
-                    c_high = max(self._crude_bar_high, c_open, c_close)
-                    c_low = min(self._crude_bar_low, c_open, c_close)
-                    self.strategy.on_bar({
-                        "symbol": "CRUDEOIL",
-                        "open": c_open,
-                        "high": c_high,
-                        "low": c_low,
-                        "close": c_close,
-                        "volume": crude_vol,
-                        "day_open": float(crude_info.get("open", crude_spot))
-                    })
-                    # Reset Crude accumulator
-                    self._crude_bar_open = crude_spot
-                    self._crude_bar_high = crude_spot
-                    self._crude_bar_low = crude_spot
-
-        elif isinstance(self.strategy, OpeningRetestStrategy) or (hasattr(self, "multi_engine") and self.multi_engine) or (hasattr(self.strategy, "on_bar")):
+        # 2b. Feed real-time ticks & 5-minute bars to active Core Duo strategies
+        if True:
             # 1. Update spot tick to monitor active SL, Target 1 Breakeven, Target 2
             tick_obj = Tick(
                 token=99926000,

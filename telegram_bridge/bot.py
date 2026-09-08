@@ -147,7 +147,7 @@ class TelegramBridge:
 
     def send_notification(self, text: str) -> bool:
         """Send an alert message directly to your phone via Telegram."""
-        import sys, os
+        import sys, os, json, urllib.request
         if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
             return False
 
@@ -162,8 +162,14 @@ class TelegramBridge:
             "disable_web_page_preview": True
         }
         try:
-            r = requests.post(url, json=payload, timeout=8)
-            return r.status_code == 200
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                return resp.status == 200
         except Exception as e:
             logger.error(f"Failed sending Telegram notification: {e}")
             return False
@@ -606,7 +612,7 @@ class TelegramBridge:
         lots_count = self.runner.lots if self.runner else settings.DEFAULT_LOTS
         qty_count = lots_count * settings.NIFTY_LOT_SIZE
 
-        strat_name = "Multi-Asset S/R Level Trader"
+        strat_name = "Core Duo (ORION-15 + THETA-0DTE)"
         if self.runner and hasattr(self.runner, "strategy") and self.runner.strategy:
             strat_name = self.runner.strategy.name
 
@@ -1272,37 +1278,48 @@ class TelegramBridge:
     # ------------------------------------------------------------------
 
     def _poll_updates(self):
+        import urllib.request, json
         while self.is_running:
             try:
-                url = f"{self.api_base}/getUpdates"
-                params = {"offset": self.last_update_id + 1, "timeout": 15}
-                r = requests.get(url, params=params, timeout=20)
+                url = f"{self.api_base}/getUpdates?offset={self.last_update_id + 1}&timeout=15"
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+                )
+                with urllib.request.urlopen(req, timeout=25) as resp:
+                    if resp.status == 200:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        for update in data.get("result", []):
+                            self.last_update_id = update["update_id"]
+                            message = update.get("message", {})
+                            text = message.get("text", "")
+                            sender_chat = str(message.get("chat", {}).get("id", ""))
+                            sender_name = message.get("from", {}).get("first_name", "Trader")
 
-                if r.status_code == 200:
-                    data = r.json()
-                    for update in data.get("result", []):
-                        self.last_update_id = update["update_id"]
-                        message = update.get("message", {})
-                        text = message.get("text", "")
-                        sender_chat = str(message.get("chat", {}).get("id", ""))
-                        sender_name = message.get("from", {}).get("first_name", "Trader")
+                            if text:
+                                reply = self.handle_message(text, sender_chat, sender_name)
+                                self._send_reply(sender_chat, reply)
 
-                        if text:
-                            reply = self.handle_message(text, sender_chat, sender_name)
-                            self._send_reply(sender_chat, reply)
-
-            except requests.exceptions.Timeout:
+            except (TimeoutError, urllib.error.URLError) as e:
+                # Normal long poll timeout or transient network reconnect
                 continue
             except Exception as e:
+                logger.error(f"Telegram polling exception: {e}")
                 time.sleep(2)
 
     def _send_reply(self, chat_id: str, text: str):
+        import urllib.request, json
         try:
-            requests.post(
-                f"{self.api_base}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-                timeout=8
+            url = f"{self.api_base}/sendMessage"
+            payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
             )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                pass
         except Exception as e:
             logger.error(f"Error replying to Telegram: {e}")
 

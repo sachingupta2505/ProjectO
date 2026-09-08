@@ -187,7 +187,7 @@ class OpeningRetestStrategy(BaseStrategy):
         if body15 < self.min_body_points:
             logger.info(f"⏭️ 15m candle body ({body15:.1f} pts) < min threshold ({self.min_body_points} pts). Skipping choppy session.")
             if self.telegram:
-                self.telegram.send_notification(f"⚠️ <b>15m Opening Candle Choppy</b>\nBody: {body15:.1f} pts (< {self.min_body_points} pts min threshold). No clear directional conviction. Standing aside today.")
+                self.telegram.send_notification(f"⚠️ <b>15m Opening Candle Choppy</b>\nBody: {body15:.1f} pts (&lt; {self.min_body_points} pts min threshold). No clear directional conviction. Standing aside today.")
             return
 
         # Filter 2: Rejection wick guard

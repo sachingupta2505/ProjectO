@@ -170,6 +170,23 @@ class TelegramBridge:
             )
             with urllib.request.urlopen(req, timeout=12) as resp:
                 return resp.status == 200
+        except urllib.error.HTTPError as e:
+            if e.code == 400 and payload.get("parse_mode"):
+                # Fallback: Retry as plain text if HTML tags were invalid
+                try:
+                    payload.pop("parse_mode", None)
+                    data = json.dumps(payload).encode("utf-8")
+                    req = urllib.request.Request(
+                        url,
+                        data=data,
+                        headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+                    )
+                    with urllib.request.urlopen(req, timeout=12) as resp:
+                        return resp.status == 200
+                except Exception:
+                    pass
+            logger.error(f"Failed sending Telegram notification: {e}")
+            return False
         except Exception as e:
             logger.error(f"Failed sending Telegram notification: {e}")
             return False
@@ -1235,6 +1252,20 @@ class TelegramBridge:
             )
             with urllib.request.urlopen(req, timeout=12) as resp:
                 pass
+        except urllib.error.HTTPError as e:
+            if e.code == 400 and payload.get("parse_mode"):
+                try:
+                    payload.pop("parse_mode", None)
+                    data = json.dumps(payload).encode("utf-8")
+                    req = urllib.request.Request(
+                        url,
+                        data=data,
+                        headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+                    )
+                    with urllib.request.urlopen(req, timeout=12) as resp:
+                        pass
+                except Exception:
+                    pass
         except Exception as e:
             logger.error(f"Error replying to Telegram: {e}")
 

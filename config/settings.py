@@ -47,34 +47,23 @@ class Settings:
     AUTO_SQUARE_OFF_TIME: str = "15:15:00"
     MARKET_END_TIME: str = "15:30:00"
 
-    # Multi-Session Market Timings
+    # Session Market Timings
     NIFTY_START_TIME: str = "09:15:00"
     NIFTY_SQUARE_OFF_TIME: str = "15:15:00"
-    CRUDE_START_TIME: str = "09:00:00"
-    CRUDE_SQUARE_OFF_TIME: str = "23:15:00"
 
     # Instrument Specifications: NIFTY 50
     INDEX_NAME: str = "NIFTY"
     NIFTY_STRIKE_STEP: int = 50
     NIFTY_LOT_SIZE: int = int(os.getenv("NIFTY_LOT_SIZE", "65"))
-    CRUDE_LOT_SIZE: int = int(os.getenv("CRUDE_LOT_SIZE", "10"))
-    DEFAULT_CRUDE_LOTS: int = 1  # 1 Lot = 10 bbl Mini for CRUDE OIL (Strict risk control)
-    CRUDE_MCX_BASIS: float = float(os.getenv("CRUDE_MCX_BASIS", "15.0"))  # Domestic MCX futures basis premium over NYMEX spot
-    DEFAULT_LOTS: int = 1        # 1 Lot = 65 Qty for NIFTY
-    SLIPPAGE_PCT: float = 0.0003  # Realistic 0.03% (approx 2.5 pts on Crude, 0.5 pts on Nifty options)
+    DEFAULT_LOTS: int = int(os.getenv("DEFAULT_LOTS", "2"))        # 2 Lots = 130 Qty for NIFTY
+    SLIPPAGE_PCT: float = 0.0003  # Realistic 0.03% (approx 0.5 pts on Nifty options)
 
     # Option Mode: "dynamic" (buys on breakouts, sells on S/R bounces & high IV), "buy_only", "sell_only"
     OPTION_ACTION_MODE: str = os.getenv("OPTION_ACTION_MODE", "dynamic")
 
-    # Instrument Specifications: CRUDE OIL (MCX)
-    CRUDE_NAME: str = "CRUDEOIL"
-    CRUDE_TICK_SIZE: float = 1.0
-    CRUDE_STRIKE_STEP: int = 50
-    CRUDE_SLIPPAGE_PCT: float = 0.0003
-
-    # Risk Management Settings (RMS) - 5-6% Capital Target (₹27,500) & 3% Capped Loss (₹15,000) on ₹5 Lakhs
-    MAX_DAILY_LOSS: float = float(os.getenv("MAX_DAILY_LOSS", "15000.0"))      # 3.0% capped loss of ₹500k capital
-    MAX_DAILY_PROFIT: float = float(os.getenv("MAX_DAILY_PROFIT", "27500.0"))  # 5.5% target of ₹500k capital
+    # Risk Management Settings (RMS) - ₹7,000 Target & ₹4,000 Max Loss on ₹200k capital
+    MAX_DAILY_LOSS: float = float(os.getenv("MAX_DAILY_LOSS", "4000.0"))
+    MAX_DAILY_PROFIT: float = float(os.getenv("MAX_DAILY_PROFIT", "7000.0"))
     MAX_LOSS_PER_TRADE: float = float(os.getenv("MAX_LOSS_PER_TRADE", "4500.0"))  # 0.9% risk per trade
     TRAILING_STOP_LOSS: bool = True
     TRAILING_STEP_POINTS: float = 5.0

@@ -14,7 +14,6 @@ from core.logger import get_logger
 from core.market_data import (
     get_live_nifty_spot,
     get_live_banknifty_spot,
-    get_live_crude_spot,
     get_live_option_chain,
     get_live_option_quote
 )
@@ -37,7 +36,6 @@ def _background_ticker_poller():
         try:
             n = get_live_nifty_spot()
             b = get_live_banknifty_spot()
-            c = get_live_crude_spot()
             spot = float(n.get("spot", 23950.0))
             atm = int(round(spot / 50.0) * 50)
 
@@ -56,9 +54,6 @@ def _background_ticker_poller():
                 "bank": float(b.get("spot", 0.0)),
                 "b_chg": float(b.get("change", 0.0)),
                 "b_pct": float(b.get("pct_change", 0.0)),
-                "crude": float(c.get("spot", 8580.0)),
-                "c_chg": float(c.get("change", 0.0)),
-                "c_pct": float(c.get("change_pct", 0.0)),
                 "ce_ltp": float(ce_q.get("ltp", 0.0)),
                 "pe_ltp": float(pe_q.get("ltp", 0.0)),
                 "expiry": pe_q.get("expiry", "2026-09-08"),
@@ -80,7 +75,6 @@ class TickerHTTPHandler(BaseHTTPRequestHandler):
                     data = dict(_TICKER_CACHE)
 
                 if not data:
-                    c = get_live_crude_spot()
                     data = {
                         "nifty": 23897.7,
                         "n_chg": 24.25,
@@ -89,9 +83,6 @@ class TickerHTTPHandler(BaseHTTPRequestHandler):
                         "bank": 57369.65,
                         "b_chg": -10.95,
                         "b_pct": -0.02,
-                        "crude": float(c.get("spot", 8580.0)),
-                        "c_chg": float(c.get("change", 0.0)),
-                        "c_pct": float(c.get("change_pct", 0.0)),
                         "ce_ltp": 123.8,
                         "pe_ltp": 59.85,
                         "expiry": "2026-09-08",

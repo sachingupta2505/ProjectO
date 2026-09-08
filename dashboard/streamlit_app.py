@@ -26,7 +26,7 @@ from brokers.angel_broker import AngelOneBroker
 from core.risk_manager import RiskManager
 from strategies.opening_retest_trader import OpeningRetestStrategy
 from strategies.theta_decay_trader import ThetaDecayTraderStrategy
-from core.market_data import get_live_nifty_spot, get_live_banknifty_spot, get_live_crude_spot
+from core.market_data import get_live_nifty_spot, get_live_banknifty_spot
 from config.settings import settings
 from core.strategy_ledger import strategy_ledger
 import streamlit.components.v1 as components
@@ -220,17 +220,6 @@ def render_realtime_broker_banner():
 
           <div class="separator"></div>
 
-          <!-- CRUDE OIL -->
-          <div class="ticker-item">
-            <div class="ticker-label">🛢️ CRUDE OIL (MCX)</div>
-            <div class="ticker-val-row">
-              <span id="crude-spot" class="ticker-price" style="color: #ffb74d;">--</span>
-              <span id="crude-badge" class="badge badge-amber">--</span>
-            </div>
-          </div>
-
-          <div class="separator"></div>
-
           <!-- DAY RANGE -->
           <div class="ticker-item">
             <div class="ticker-label">DAY RANGE</div>
@@ -312,20 +301,7 @@ def render_realtime_broker_banner():
             bBadge.textContent = bSign + bChg.toFixed(2) + " (" + bSign + bPct.toFixed(2) + "%)";
             bBadge.className = "badge " + (bChg >= 0 ? "badge-up" : "badge-down");
 
-            // 3. CRUDE OIL (MCX)
-            const cVal = data.crude || 0;
-            const cEl = document.getElementById("crude-spot");
-            const cBadge = document.getElementById("crude-badge");
-            if (cEl && cVal > 0) {
-              cEl.textContent = "₹" + cVal.toLocaleString("en-IN", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-              const cChg = data.c_chg || 0;
-              const cPct = data.c_pct || 0;
-              const cSign = cChg >= 0 ? "+" : "";
-              cBadge.textContent = cSign + cChg.toFixed(1) + " (" + cSign + cPct.toFixed(1) + "%)";
-              cBadge.className = "badge " + (cChg >= 0 ? "badge-up" : "badge-down");
-            }
-
-            // 4. ATM Strike & Options
+            // 3. ATM Strike & Options
             document.getElementById("atm-strike").textContent = data.atm || "--";
             document.getElementById("pe-ltp").textContent = "₹" + (data.pe_ltp ? data.pe_ltp.toFixed(2) : "--");
             document.getElementById("ce-ltp").textContent = "₹" + (data.ce_ltp ? data.ce_ltp.toFixed(2) : "--");
@@ -1127,7 +1103,7 @@ def render_dashboard():
             f"🤖 **Live Adaptive Execution Engine: ACTIVE** | "
             f"🚫 **Active Chop Guard:** {bl_text} | "
             f"🛡️ **Elevated Volume Levels:** {elev_text} | "
-            f"⚙️ **Calibrated BE:** Nifty +{summary.get('nifty_be_pct', 0.02)*100:.1f}% / Crude +{summary.get('crude_be_pts', 20.0):.1f} pts"
+            f"⚙️ **Calibrated BE:** Nifty +{summary.get('nifty_be_pct', 0.02)*100:.1f}%"
         )
 
         # Section 1: Excursion Table

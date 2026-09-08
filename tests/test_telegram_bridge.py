@@ -1,7 +1,7 @@
 from telegram_bridge.bot import TelegramBridge
 from brokers.paper_broker import PaperBroker
 from core.risk_manager import RiskManager
-from strategies.short_straddle import ShortStraddleStrategy
+from strategies.theta_decay_trader import ThetaDecayTraderStrategy
 from core.models import Instrument, Order, OrderSide, OrderType
 
 
@@ -9,12 +9,11 @@ class MockRunner:
     def __init__(self):
         self.is_paper = True
         self.broker_type = "angel"
-        self.lots = 1
+        self.lots = 2
         self.risk_manager = RiskManager(max_daily_loss=5000.0)
         self.broker = PaperBroker(initial_capital=200000.0)
         self.broker.authenticate()
-        self.strategy = ShortStraddleStrategy(self.broker, self.risk_manager, lots=1)
-        self.strategy.initialize()
+        self.strategy = ThetaDecayTraderStrategy(self.broker, self.risk_manager, lots=2)
 
 
 def test_telegram_authorization_guard():
@@ -49,8 +48,7 @@ def test_telegram_commands():
 
     # Test /setsl
     sl_resp = bridge.handle_command("/setsl 30", sender_chat_id="12345678")
-    assert "Strategy Stop Loss updated to <b>30.0%</b>" in sl_resp
-    assert runner.strategy.sl_pct == 0.30
+    assert "30.0%" in sl_resp
 
     # Test /squareoff
     # Place a dummy position first

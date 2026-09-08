@@ -370,15 +370,9 @@ class TelegramBridge:
                 f"💬 <i>You can chat naturally (e.g. 'what is nifty trading at', 'what is my balance', 'pc status', 'set lots to 2') or use /help!</i>"
             )
 
-        # 2. Live Market Quotes (NIFTY, BANKNIFTY, VIX, CRUDE OIL)
+        # 2. Crude decommission guard
         if any(w in lower for w in ["crude", "crudeoil", "crude oil", "mcx crude", "tel"]):
-            if any(w in lower for w in ["buy", "long"]):
-                return self._cmd_trade_crude("LONG", [])
-            elif any(w in lower for w in ["sell", "short"]):
-                return self._cmd_trade_crude("SHORT", [])
-            elif any(w in lower for w in ["level", "support", "resistance", "zone"]):
-                return self._cmd_levels(["crude"])
-            return self._cmd_crude()
+            return "ℹ️ <b>Crude Oil Decommissioned:</b> ProjectO is strictly dedicated to NIFTY 50 options (Core Duo: ORION-15 + THETA-0DTE). Send /nifty or /levels for live Nifty data."
 
         if any(w in lower for w in ["trading at", "nifty price", "nifty spot", "market quote", "banknifty", "vix", "index", "bhav", "nifty kitna"]):
             return self._cmd_market()
@@ -402,12 +396,9 @@ class TelegramBridge:
             args = [price_m.group(1)] if price_m else []
             return self._cmd_buy_option("CE", args)
 
-        # 2d. Support & Resistance Levels
+        # 2d. Support & Resistance Levels (NIFTY)
         if any(w in lower for w in ["levels", "support", "resistance", "zone", "sr level"]):
-            args = ["crude"] if any(c in lower for c in ["crude", "oil", "mcx"]) else []
-            if any(n in lower for n in ["nifty", "nse"]):
-                args = ["nifty"]
-            return self._cmd_levels(args)
+            return self._cmd_levels([])
 
         # 3. PnL / Balance / Financials
         if any(w in lower for w in ["pnl", "profit", "loss", "balance", "margin", "kamai", "kitna", "rupees", "cash", "portfolio", "net worth"]):
@@ -525,18 +516,14 @@ class TelegramBridge:
             return self._cmd_market()
         elif cmd in ("/options", "/chain", "/oc"):
             return self._cmd_option_chain()
-        elif cmd in ("/crude", "/crudeoil", "/oil"):
-            return self._cmd_crude()
+        elif cmd in ("/crude", "/crudeoil", "/oil", "/buycrude", "/sellcrude", "/longcrude", "/shortcrude"):
+            return "ℹ️ <b>Crude Oil Decommissioned:</b> ProjectO is now strictly dedicated to NIFTY 50 options (Core Duo: ORION-15 + THETA-0DTE)."
         elif cmd in ("/levels", "/sr", "/zones"):
             return self._cmd_levels(cmd_parts[1:])
         elif cmd in ("/buype", "/buyput", "/pe"):
             return self._cmd_buy_option("PE", cmd_parts[1:])
         elif cmd in ("/buyce", "/buycall", "/ce"):
             return self._cmd_buy_option("CE", cmd_parts[1:])
-        elif cmd in ("/buycrude", "/longcrude", "/crudelong", "/crudece"):
-            return self._cmd_trade_crude("LONG", cmd_parts[1:])
-        elif cmd in ("/sellcrude", "/shortcrude", "/crudeshort", "/crudepe"):
-            return self._cmd_trade_crude("SHORT", cmd_parts[1:])
         elif cmd in ("/pc", "/system"):
             return self._cmd_pc_status()
         elif cmd in ("/cmd", "/run"):
@@ -575,14 +562,11 @@ class TelegramBridge:
             "🤖 <b>ProjectO Assistant — Mobile Commands & Control</b>\n\n"
             "📈 <b>Live Market & Levels:</b>\n"
             "• /nifty — Real-time NSE Nifty 50, Bank Nifty & VIX\n"
-            "• /crude — Real-time MCX Crude Oil spot, WTI price & S/R levels\n"
             "• /options — Live NIFTY ATM Option Chain table\n"
-            "• /levels — Marked Support & Resistance levels & distances\n\n"
+            "• /levels — Marked NIFTY Support & Resistance levels & distances\n\n"
             "🎯 <b>Mobile Trading:</b>\n"
             "• /buype [price] — Buy ATM NIFTY Put Option (2 Lots)\n"
-            "• /buyce [price] — Buy ATM NIFTY Call Option (2 Lots)\n"
-            "• /buycrude — Buy MCX Crude Oil Futures (4 Lots Mini / 40 bbl)\n"
-            "• /sellcrude — Short MCX Crude Oil Futures (4 Lots Mini / 40 bbl)\n\n"
+            "• /buyce [price] — Buy ATM NIFTY Call Option (2 Lots)\n\n"
             "📊 <b>Trading Monitoring:</b>\n"
             "• /status — Engine, broker & strategy status\n"
             "• /pnl — Net PnL, Gross PnL, Charges & cash balance\n"
@@ -596,12 +580,12 @@ class TelegramBridge:
             "• /mode &lt;paper|live&gt; — Switch paper/live mode\n"
             "• /squareoff — Emergency exit ALL positions\n\n"
             "🧠 <b>AI Continuous Learning & S/R Engine:</b>\n"
-            "• /learnings — Active AI chop filters, level multipliers & calibrated triggers\n"
+            "• /learnings — Active AI chop filters & calibrated triggers\n"
             "• /refreshlevels — Auto-recalculate and sync Daily CPR & Pivot levels\n\n"
             "💻 <b>PC Remote Management:</b>\n"
             "• /pc — CPU, RAM, Disk & system stats\n"
             "• /cmd &lt;command&gt; — Run terminal command on your PC\n\n"
-            "💬 <i>You can also chat in plain English (e.g. 'crude', 'nifty', 'pnl', 'status')!</i>"
+            "💬 <i>You can also chat in plain English (e.g. 'nifty', 'pnl', 'status', 'levels')!</i>"
         )
 
     def _cmd_status(self) -> str:
@@ -641,7 +625,7 @@ class TelegramBridge:
             f"<b>Mode:</b> {mode_str}\n"
             f"<b>Broker:</b> {broker_name}\n"
             f"<b>Strategy:</b> {strat_name}\n"
-            f"<b>Nifty Lots:</b> {lots_count} ({qty_count} Qty) | <b>Crude Lots:</b> {settings.DEFAULT_CRUDE_LOTS} ({settings.DEFAULT_CRUDE_LOTS*settings.CRUDE_LOT_SIZE} bbl)\n"
+            f"<b>Lots:</b> {lots_count} ({qty_count} Qty)\n"
             f"<b>RMS Status:</b> {kill_switch}\n"
             f"<b>Target Limit:</b> +₹{settings.MAX_DAILY_PROFIT:,.2f} | <b>Max Loss Limit:</b> -₹{settings.MAX_DAILY_LOSS:,.2f}\n"
             f"{leg_info}\n"
@@ -971,8 +955,7 @@ class TelegramBridge:
                 f"⭐ <b>Golden Edge Windows:</b>\n  • {gl_str}\n\n"
                 f"🛡️ <b>Elevated Volume Multiplier Levels:</b>\n{elev_str}\n\n"
                 f"⚙️ <b>Calibrated Breakeven Triggers:</b>\n"
-                f"  • Nifty: +{summary.get('nifty_be_pct', 0.02)*100:.1f}%\n"
-                f"  • Crude Oil: +{summary.get('crude_be_pts', 20.0):.1f} pts\n\n"
+                f"  • Nifty: +{summary.get('nifty_be_pct', 0.02)*100:.1f}%\n\n"
                 "<i>Adaptive engine automatically updates rules after every single trade exit.</i>"
             )
         except Exception as e:
@@ -986,7 +969,7 @@ class TelegramBridge:
                 f"✅ <b>Daily S/R Levels Successfully Recalculated!</b>\n\n"
                 f"• <b>New Pivot/CPR Levels Computed:</b> {res.get('refreshed_count', 0)}\n"
                 f"• <b>Total Active Trading Levels:</b> {res.get('total_active_levels', 0)}\n"
-                f"• <b>Assets Synchronized:</b> NIFTY 50 & MCX CRUDE OIL\n\n"
+                f"• <b>Asset Synchronized:</b> NIFTY 50\n\n"
                 f"<i>Includes Daily CPR, Classical R1/S1/R2/S2, and Camarilla H4/L4 Breakout Zones.</i>"
             )
         except Exception as e:
@@ -1089,126 +1072,21 @@ class TelegramBridge:
             return f"⚠️ Order placement error: {e}"
 
     def _cmd_trade_crude(self, direction: str, args: List[str]) -> str:
-        try:
-            from core.market_data import get_live_crude_spot
-            from core.models import Instrument, Order, OrderSide, OrderType
-            broker_obj = self._get_active_broker()
-            if not broker_obj:
-                return "⚠️ Broker not available."
-
-            crude = get_live_crude_spot()
-            spot = float(crude.get("spot", 8570.0))
-            is_long = (direction.upper() == "LONG")
-            lots = getattr(settings, "DEFAULT_CRUDE_LOTS", 4)
-            lot_size = getattr(settings, "CRUDE_LOT_SIZE", 10)
-            qty = lots * lot_size
-
-            symbol = f"CRUDEOIL_{datetime.now().strftime('%b').upper()}FUT"
-            inst = Instrument(
-                symbol=symbol,
-                exchange="MCX",
-                lot_size=lot_size,
-                tick_size=1.0,
-                asset_class="COMMODITY"
-            )
-
-            order = Order(
-                order_id=f"CRUDE_{uuid.uuid4().hex[:6].upper()}",
-                instrument=inst,
-                side=order_side,
-                order_type=OrderType.MARKET,
-                quantity=qty,
-                price=spot,
-                tag=f"TG_CRUDE_{direction.upper()}"
-            )
-
-            placed = broker_obj.place_order(order)
-            fill_price = placed.average_price or spot
-
-            pts_target = 65.0
-            pts_sl = 30.0
-            target_p = round(fill_price + pts_target, 2) if is_long else round(fill_price - pts_target, 2)
-            sl_p = round(fill_price - pts_sl, 2) if is_long else round(fill_price + pts_sl, 2)
-
-            return (
-                f"🛢️ <b>CRUDE OIL Order Executed!</b>\n\n"
-                f"• <b>Contract:</b> <b>{symbol}</b> (MCX Commodity)\n"
-                f"• <b>Direction:</b> {'🟢 BUY (LONG)' if is_long else '🔴 SELL (SHORT)'}\n"
-                f"• <b>Quantity:</b> {qty} Barrels ({lots} Mini Lots)\n"
-                f"• <b>Fill Price:</b> ₹{fill_price:,.2f} (Total Value: ₹{fill_price * qty:,.2f})\n\n"
-                f"🎯 <b>Target (+{pts_target:.0f} pts):</b> ₹{target_p:,.2f} (+₹{pts_target * qty:,.2f})\n"
-                f"🛑 <b>Stop Loss (-{pts_sl:.0f} pts):</b> ₹{sl_p:,.2f} (-₹{pts_sl * qty:,.2f})\n\n"
-                f"<i>State file updated. Synced across Web Dashboard and Telegram!</i>"
-            )
-        except Exception as e:
-            return f"⚠️ Crude Oil trade failed: {e}"
+        return "ℹ️ Crude Oil trading is decommissioned. ProjectO trades strictly NIFTY 50 options."
 
     def _cmd_crude(self) -> str:
-        try:
-            from core.market_data import get_live_crude_spot
-            from core.level_models import load_levels_config
-            crude = get_live_crude_spot()
-            spot = float(crude.get("spot", 8570.0))
-            usd = float(crude.get("usd_price", 90.7))
-            fx = float(crude.get("usdinr", 94.5))
-            chg = float(crude.get("change", 0.0))
-            chg_pct = float(crude.get("change_pct", 0.0))
-            high = float(crude.get("day_high", spot))
-            low = float(crude.get("day_low", spot))
-            chg_icon = "🟢" if chg >= 0 else "🔴"
-
-            lvls = load_levels_config("CRUDEOIL")
-            supports = [l for l in lvls if l.is_active and l.price < spot]
-            resistances = [l for l in lvls if l.is_active and l.price > spot]
-            nearest_sup = max(supports, key=lambda x: x.price) if supports else None
-            nearest_res = min(resistances, key=lambda x: x.price) if resistances else None
-
-            res_txt = f"₹{nearest_res.price:,.1f} (+{nearest_res.price - spot:.1f} pts)" if nearest_res else "None"
-            sup_txt = f"₹{nearest_sup.price:,.1f} (-{spot - nearest_sup.price:.1f} pts)" if nearest_sup else "None"
-
-            return (
-                f"🛢️ <b>CRUDE OIL (MCX Continuous Feed)</b>\n\n"
-                f"• <b>Live Price:</b> <b>₹{spot:,.2f}</b> / bbl ({chg_icon} {chg:+,.2f} / {chg_pct:+.2f}%)\n"
-                f"• <b>Global WTI:</b> ${usd:.2f} | <b>USD/INR:</b> ₹{fx:.2f}\n"
-                f"• <b>Day Range:</b> Low ₹{low:,.2f} — High ₹{high:,.2f}\n"
-                f"• <b>MCX Lot Size:</b> 10 Barrels (Mini) / 100 Barrels (Standard)\n\n"
-                f"🎯 <b>Active S/R Key Levels:</b>\n"
-                f"• 🔴 <b>Nearest Resistance:</b> {res_txt}\n"
-                f"• 🟢 <b>Nearest Support:</b> {sup_txt}\n\n"
-                f"🕒 MCX Market Session: 09:00 to 23:15 IST\n"
-                f"🛡️ Daily Guardrails: Max Target +₹{settings.MAX_DAILY_PROFIT:,.0f} | Max SL -₹{settings.MAX_DAILY_LOSS:,.0f}"
-            )
-        except Exception as e:
-            return f"⚠️ Error fetching Crude Oil data: {e}"
+        return "ℹ️ Crude Oil feed is decommissioned. ProjectO trades strictly NIFTY 50 options."
 
     def _cmd_levels(self, args: Optional[List[str]] = None) -> str:
         try:
             from core.level_models import load_levels_config
-            from core.market_data import get_live_nifty_spot, get_live_crude_spot
+            from core.market_data import get_live_nifty_spot
 
-            req_text = " ".join(args).upper() if args else ""
-            is_crude = any(w in req_text for w in ["CRUDE", "OIL", "MCX"])
-            is_nifty = any(w in req_text for w in ["NIFTY", "NSE"])
-
-            # Smart Session Routing: If not explicitly requested, check current market session
-            if not is_crude and not is_nifty:
-                now_t = datetime.now().time()
-                # NSE closes at 15:30 IST. From 15:30 to 23:30 IST, MCX Crude is the only active market
-                if now_t >= datetime.strptime("15:30:00", "%H:%M:%S").time() or now_t < datetime.strptime("09:15:00", "%H:%M:%S").time():
-                    is_crude = True
-
-            if is_crude:
-                crude = get_live_crude_spot()
-                spot = float(crude.get("spot", 8700.0))
-                lvls = load_levels_config("CRUDEOIL")
-                title = "🛢️ <b>CRUDE OIL Key Support & Resistance Levels (MCX Active)</b>\n"
-                pts_label = "pts"
-            else:
-                spot_data = get_live_nifty_spot()
-                spot = float(spot_data.get("spot", 23950.0))
-                lvls = load_levels_config("NIFTY")
-                title = "🎯 <b>NIFTY 50 Support & Resistance Levels</b>\n"
-                pts_label = "pts"
+            spot_data = get_live_nifty_spot()
+            spot = float(spot_data.get("spot", 23950.0))
+            lvls = load_levels_config("NIFTY")
+            title = "🎯 <b>NIFTY 50 Support & Resistance Levels</b>\n"
+            pts_label = "pts"
 
             tf_filter = None
             if any("WEEK" in a.upper() for a in (args or [])):
@@ -1254,21 +1132,12 @@ class TelegramBridge:
             tf_legend = "<i>[D]=Daily, [W]=Weekly, [M]=Monthly</i>\n"
             lines.append(f"\n{tf_legend}")
 
-            if not is_crude:
-                lines.append(
-                    "\n💡 <b>Trading Actions:</b>\n"
-                    "• Send /buype to buy ATM Put (10% Target & 5% SL, 2:1 RR)\n"
-                    "• Send /buyce to buy ATM Call (10% Target & 5% SL, 2:1 RR)\n"
-                    "• Send /options to view live ATM option chain table\n"
-                    "• Send /levels crude to view MCX Crude Oil levels"
-                )
-            else:
-                lines.append(
-                    "\n💡 <b>Trading Actions:</b>\n"
-                    "• Automated S/R Trigger: 70 pts Target & 35 pts SL (2:1 RR)\n"
-                    "• Send /levels to view NIFTY 50 levels\n"
-                    "• Send /crude to view live MCX Continuous Feed"
-                )
+            lines.append(
+                "\n💡 <b>Trading Actions:</b>\n"
+                "• Send /buype to buy ATM Put (10% Target & 5% SL, 2:1 RR)\n"
+                "• Send /buyce to buy ATM Call (10% Target & 5% SL, 2:1 RR)\n"
+                "• Send /options to view live ATM option chain table"
+            )
             return "\n".join(lines)
         except Exception as e:
             return f"⚠️ Error fetching levels: {e}"

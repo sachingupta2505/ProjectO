@@ -1,8 +1,8 @@
 """
-Main Entry Point and Orchestrator for Dual-Asset Algorithmic Trading Bot.
-Manages broker initialization, multi-asset strategy lifecycle (NIFTY 50 & CRUDE OIL),
-real-time market data streaming, multi-session market timings, and strict daily RMS risk guardrails
-(₹10,000 Maximum Profit Target & ₹10,000 Maximum Stop Loss).
+Main Entry Point and Orchestrator for Algorithmic Trading Bot (NIFTY 50 Options).
+Manages broker initialization, Core Duo strategy lifecycle (ORION-15 + THETA-0DTE),
+real-time market data streaming, and strict daily RMS risk guardrails
+(₹7,000 Maximum Profit Target & ₹4,000 Maximum Stop Loss).
 """
 
 import sys
@@ -26,7 +26,7 @@ from core.models import Tick, Instrument
 from core.risk_manager import RiskManager
 from core.option_chain import get_atm_strike
 from core.market_data import (
-    get_live_nifty_spot, get_live_crude_spot, get_live_option_quote
+    get_live_nifty_spot, get_live_option_quote
 )
 from brokers.paper_broker import PaperBroker
 from brokers.angel_broker import AngelOneBroker
@@ -62,9 +62,6 @@ class TradingBotRunner:
         self._nifty_bar_open: Optional[float] = None
         self._nifty_bar_high: float = -1e9
         self._nifty_bar_low: float = 1e9
-        self._crude_bar_open: Optional[float] = None
-        self._crude_bar_high: float = -1e9
-        self._crude_bar_low: float = 1e9
         # 5-minute candle aggregation state for ORION Opening Retest
         self._5m_bar_open: Optional[float] = None
         self._5m_bar_high: float = -1e9
@@ -192,14 +189,13 @@ class TradingBotRunner:
         # Startup notification
         self.telegram.send_notification(
             f"🚀 <b>Trading Bot Active!</b>\n\n"
-            f"• <b>Assets:</b> NIFTY 50 (NSE/NFO) & CRUDE OIL (MCX)\n"
+            f"• <b>Asset:</b> NIFTY 50 (NSE/NFO Options)\n"
             f"• <b>Strategy:</b> {self.strategy.name}\n"
             f"• <b>Mode:</b> {'PAPER' if self.is_paper else 'LIVE'}\n"
+            f"• <b>Lots:</b> {self.lots} ({self.lots * settings.NIFTY_LOT_SIZE} Qty)\n"
             f"• <b>Daily Target:</b> +₹{self.risk_manager.max_daily_profit:,.2f}\n"
             f"• <b>Daily Stop Loss:</b> -₹{self.risk_manager.max_daily_loss:,.2f}\n\n"
-            f"🕒 Multi-Session Timings:\n"
-            f"  - Nifty: 09:15 to 15:15 IST\n"
-            f"  - Crude Oil: 09:00 to 23:15 IST"
+            f"🕒 Session Timings: 09:15 to 15:15 IST"
         )
 
         if ui_mode == "terminal":
@@ -223,17 +219,13 @@ class TradingBotRunner:
         now = datetime.now()
         now_ts = time.time()
 
-        # 1. Fetch live market data for NIFTY 50 and CRUDE OIL
+        # 1. Fetch live market data for NIFTY 50
         nifty_spot = current_spot
-        crude_spot = 8570.0
         nifty_info: Dict[str, Any] = {}
-        crude_info: Dict[str, Any] = {}
 
         if simulate:
             shock_n = np.random.normal(0, 0.0003)
             nifty_spot = round(nifty_spot * (1.0 + shock_n), 2)
-            shock_c = np.random.normal(0, 0.0005)
-            crude_spot = round(8570.0 * (1.0 + shock_c), 2)
         else:
             try:
                 nifty_info = get_live_nifty_spot()
@@ -242,24 +234,7 @@ class TradingBotRunner:
             except Exception as e:
                 logger.debug(f"Nifty spot query: {e}")
 
-            try:
-                crude_info = get_live_crude_spot()
-                if crude_info and crude_info.get("spot"):
-                    crude_spot = float(crude_info["spot"])
-            except Exception as e:
-                logger.debug(f"Crude spot query: {e}")
-
-        # 2a. Directly update LTP for all open broker positions & commodity symbols from live feeds
-        curr_crude_fut = f"CRUDEOIL_{datetime.now().strftime('%b').upper()}FUT"
-        self.broker.set_ltp("CRUDEOIL", crude_spot)
-        self.broker.set_ltp(curr_crude_fut, crude_spot)
-        open_pos_map = self.broker.get_positions()
-        for sym, pos in open_pos_map.items():
-            if pos.quantity != 0:
-                if "CRUDE" in sym.upper():
-                    self.broker.set_ltp(sym, crude_spot)
-
-        # 2b. Feed real-time ticks & 5-minute bars to active Core Duo strategies
+        # 2. Feed real-time ticks & 5-minute bars to active Core Duo strategies
         if True:
             # 1. Update spot tick to monitor active SL, Target 1 Breakeven, Target 2
             tick_obj = Tick(
@@ -342,7 +317,7 @@ class TradingBotRunner:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Multi-Asset Algorithmic Trading Bot (NIFTY 50 & CRUDE OIL)")
+    parser = argparse.ArgumentParser(description="Institutional Algorithmic Trading Bot (NIFTY 50 Options - Core Duo)")
     parser.add_argument("--mode", choices=["paper", "live"], default="paper", help="Execution mode: paper or live")
     parser.add_argument("--broker", choices=["paper", "angel"], default="paper", help="Broker adapter to use")
     parser.add_argument("--strategy", choices=["duo", "orion", "theta"], default="duo", help="Strategy to trade (default: duo [ORION-15 + THETA-0DTE])")

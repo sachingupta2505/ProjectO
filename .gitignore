@@ -27,6 +27,12 @@ venv/
 .venv/
 env/
 
+# Third-party repositories are cloned locally by scripts/bootstrap_third_party.ps1.
+# Keep only the manifest under version control; never vendor external repositories
+# into ProjectO without an explicit licence review.
+third_party/*
+!third_party/README.md
+
 # IDE / OS
 .vscode/
 .idea/

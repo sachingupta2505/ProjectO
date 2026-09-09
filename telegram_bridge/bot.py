@@ -671,7 +671,7 @@ class TelegramBridge:
         lots_count = self.runner.lots if self.runner else settings.DEFAULT_LOTS
         qty_count = lots_count * settings.NIFTY_LOT_SIZE
 
-        strat_name = "Core Duo (ORION-15 + THETA-0DTE)"
+        strat_name = "ORION 2.0 (NIFTY opening retest)"
         if self.runner and hasattr(self.runner, "strategy") and self.runner.strategy:
             strat_name = self.runner.strategy.name
 

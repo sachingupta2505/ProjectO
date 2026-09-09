@@ -1,6 +1,6 @@
 # Nifty Options Algorithmic Trading Bot ⚡
 
-A modular, production-ready algorithmic trading bot built in Python for trading **NSE Nifty 50 Options**. It supports option selling strategies (e.g. 9:20 AM Short Straddle / Strangle) and directional option buying (e.g. Momentum Breakout with trailing SL), backed by a Risk Management System (RMS), multi-broker abstraction, and real-time dashboards.
+A focused paper-trading bot for **ORION 2.0**, a NIFTY 50 opening-retest options strategy. It uses verified opening candles, explicit risk limits, Telegram decision alerts, and a real-time dashboard.
 
 ---
 
@@ -9,9 +9,7 @@ A modular, production-ready algorithmic trading bot built in Python for trading 
 - **Multi-Broker Architecture**:
   - **Paper Trading Engine**: Real-time simulated execution with realistic fills, slippage modeling, and mark-to-market (MTM) PnL calculation. Safe to run without broker credentials.
   - **Angel One SmartAPI**: Automated TOTP session creation (`pyotp`), order routing, and positions tracking.
-- **Built-in Systematic Strategies**:
-  - **ORION-15 Opening Retest**: Trades a validated 15-minute opening move after a 50% retest, with defined invalidation and staged profit targets.
-  - **THETA-0DTE Decay**: Runs a time-bound expiry-day short strangle with independent leg-level stops and auto square-off.
+- **ORION 2.0 Opening Retest**: Trades a validated 15-minute NIFTY opening move after a 35–65% retest, with defined invalidation and staged profit targets.
 - **Strict Risk Management (RMS)**:
   - **Daily Circuit / Kill Switch**: Automatically halts trading and squares off open positions if cumulative loss hits the daily threshold (e.g., -₹5,000).
   - **Trailing Stop Loss (TSL)**: Automatically locks in paper profits as trades move favorably.
@@ -71,13 +69,9 @@ python backtest.py
 ```
 
 ### 3. Run the Bot in Paper Trading Mode (Terminal UI)
-Start the combined ORION-15 and THETA-0DTE strategies with live simulated ticks:
+Run ORION 2.0:
 ```bash
-python main.py --mode paper --strategy duo --simulate
-```
-To run ORION-15 alone:
-```bash
-python main.py --mode paper --strategy orion --simulate
+python main.py --mode paper --strategy orion --index NIFTY --lots 3
 ```
 
 ### 4. Run the Streamlit Web Dashboard

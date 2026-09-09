@@ -15,6 +15,7 @@ oc.json
 # Logs & dynamic state
 logs/
 *.log
+runs/
 
 # Python cache & virtualenvs
 __pycache__/

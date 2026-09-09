@@ -609,10 +609,10 @@ def render_dashboard():
         m4.metric("Available Cash", f"₹{avail_cash:,.2f}" if avail_cash > 0 else "SmartAPI Auth OK")
 
     else:
-        # Core Duo Brokers (ORION-15 + THETA-0DTE)
+        # The production runner is ORION-only. Keep one paper account aligned
+        # with the bot command instead of presenting legacy portfolio totals.
         active_brokers = [
-            PaperBroker(account_name="orion", persist=True),
-            PaperBroker(account_name="theta", persist=True)
+            PaperBroker(account_name="orion", persist=True)
         ]
         tot_cap = sum(b.initial_capital for b in active_brokers)
         tot_cash = sum(b.available_cash for b in active_brokers)
@@ -620,11 +620,11 @@ def render_dashboard():
         tot_used = sum(b.get_margins().get("margin_used", 0.0) for b in active_brokers)
         
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("💰 Core Duo Capital", f"₹{tot_cap:,.2f}", "2 Accounts × ₹1L")
+        m1.metric("💰 ORION Capital", f"₹{tot_cap:,.2f}")
         m2.metric("💵 Available Funds", f"₹{tot_cash:,.2f}", f"₹{tot_used:,.2f} Used")
         m3.metric("📈 Today's Net Profit", f"₹{tot_pnl:+,.2f}", delta=f"{tot_pnl:+,.2f}", delta_color="normal")
-        m4.metric("🎯 Active Strategies", "Core Duo (71.9% WR)", f"{lots} Lots (130 Qty)")
-        m5.metric("🤖 Bot Daemon", "🟢 Armed & Ready", "ORION-15 + THETA-0DTE")
+        m4.metric("🎯 Active Strategy", "ORION 2.0", f"{lots} Lots")
+        m5.metric("🤖 Bot Daemon", "🟢 Armed & Ready", "NIFTY opening retest")
 
     st.divider()
 

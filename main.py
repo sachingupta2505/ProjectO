@@ -1,8 +1,6 @@
 """
-Main Entry Point and Orchestrator for Algorithmic Trading Bot (NIFTY 50 Options).
-Manages broker initialization, Core Duo strategy lifecycle (ORION-15 + THETA-0DTE),
-real-time market data streaming, and strict daily RMS risk guardrails
-(₹7,000 Maximum Profit Target & ₹4,000 Maximum Stop Loss).
+Main entry point for the ORION 2.0 NIFTY 50 paper-trading bot.
+Manages one opening-retest strategy, verified market data, and daily RMS limits.
 """
 
 import sys
@@ -173,7 +171,7 @@ class TradingBotRunner:
         sys.exit(0)
 
     def start(self, ui_mode: str = "headless", simulate_ticks: bool = False, initial_spot: float = 23950.0, listen_telegram: bool = True):
-        logger.info("🚀 Initializing Multi-Asset Trading Engine (NIFTY 50 & CRUDE OIL)...")
+        logger.info("🚀 Initializing ORION 2.0 NIFTY paper-trading runner...")
         if not self.broker.authenticate():
             logger.error("Failed to authenticate with broker. Exiting.")
             return
@@ -186,11 +184,11 @@ class TradingBotRunner:
             self.telegram.start()
         self.running = True
 
-        # ── Start Angel One WebSocket price feed (real MCX LTP) ──────────────
+        # ── Start Angel One WebSocket quote feed ─────────────────────────────
         try:
             from core.angel_feed import angel_feed
             angel_feed.start()
-            logger.info("✅ Angel One WebSocket price feed started (MCX Crude LTP).")
+            logger.info("✅ Angel One WebSocket quote feed started (NIFTY monitoring).")
         except Exception as e:
             logger.warning(f"⚠️ Angel One WebSocket feed failed to start: {e}. Falling back to Yahoo Finance.")
 
@@ -261,7 +259,7 @@ class TradingBotRunner:
                     f"the dashboard will then monitor silently until the 11:00 decision summary."
                 )
 
-        # 2. Feed real-time ticks & 5-minute bars to active Core Duo strategies
+        # 2. Feed real-time ticks and completed 5-minute bars to ORION.
         if is_market_session:
             # 1. Update spot tick to monitor active SL, Target 1 Breakeven, Target 2
             tick_obj = Tick(
@@ -518,11 +516,11 @@ class TradingBotRunner:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Institutional Algorithmic Trading Bot (NIFTY 50 Options - Core Duo)")
+    parser = argparse.ArgumentParser(description="ORION 2.0 NIFTY 50 paper-trading bot")
     parser.add_argument("--mode", choices=["paper", "live"], default="paper", help="Execution mode: paper or live")
     parser.add_argument("--broker", choices=["paper", "angel"], default="paper", help="Broker adapter to use")
-    parser.add_argument("--strategy", choices=["duo", "orion", "theta"], default="duo", help="Strategy to trade (default: duo [ORION-15 + THETA-0DTE])")
-    parser.add_argument("--index", choices=["NIFTY", "FINNIFTY", "SENSEX", "BANKNIFTY"], default="NIFTY", help="Target index for opening retest (default: NIFTY)")
+    parser.add_argument("--strategy", choices=["orion"], default="orion", help="ORION 2.0 opening-retest strategy")
+    parser.add_argument("--index", choices=["NIFTY"], default="NIFTY", help="ORION trades NIFTY 50 only")
     parser.add_argument("--lots", type=int, default=getattr(settings, "DEFAULT_LOTS", 1), help="Number of lots to trade")
     parser.add_argument("--ui", choices=["terminal", "web", "headless"], default="headless", help="UI to display")
     parser.add_argument("--simulate", action="store_true", help="Simulate ticks for testing")

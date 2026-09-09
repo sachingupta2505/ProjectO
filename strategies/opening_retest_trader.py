@@ -112,6 +112,7 @@ class OpeningRetestStrategy(BaseStrategy):
         self.opening_fetch_attempts: int = 0
         self.next_opening_fetch_retry_at: Optional[datetime] = None
         self.opening_fetch_final_failure: bool = False
+        self.opening_data_pending: bool = False
 
     def initialize(self):
         """Set active state and prepare daily session."""
@@ -194,46 +195,78 @@ class OpeningRetestStrategy(BaseStrategy):
         # marker and remain fully deterministic.
         runtime_bars = any("data_source" in bar or "is_live" in bar for bar in self.bars_5m)
         should_fetch_exchange_bars = runtime_bars or len(self.bars_5m) < 3
+        opening_ohlc = None
         if should_fetch_exchange_bars:
             try:
                 self.opening_fetch_attempts += 1
                 from scripts.download_candles import fetch_and_save_candles
-                df_hist = fetch_and_save_candles(self.symbol, "5m", days_back=2, save_csv=False)
-                df_hist["timestamp"] = pd.to_datetime(df_hist["timestamp"])
-                today_df = df_hist[df_hist["timestamp"].dt.date == current_dt.date()].sort_values("timestamp")
-                if len(today_df) >= 3:
-                    self.bars_5m = today_df.iloc[:3].to_dict("records")
-                elif runtime_bars:
-                    raise RuntimeError(f"Angel returned only {len(today_df)} opening bars")
+                # Angel publishes a native 15-minute interval. It is the primary
+                # source because ORION's setup is defined from one 09:15–09:30
+                # candle. A verified 5-minute reconstruction remains a fallback
+                # for delayed/missing 15-minute publication.
+                df_15m = fetch_and_save_candles(self.symbol, "15m", days_back=2, save_csv=False)
+                if not df_15m.empty:
+                    df_15m["timestamp"] = pd.to_datetime(df_15m["timestamp"])
+                    today_15m = df_15m[df_15m["timestamp"].dt.date == current_dt.date()].sort_values("timestamp")
+                    if not today_15m.empty:
+                        row = today_15m.iloc[0]
+                        opening_ohlc = {
+                            "open": float(row["open"]), "high": float(row["high"]),
+                            "low": float(row["low"]), "close": float(row["close"]),
+                            "source": "Angel 15-minute",
+                        }
+
+                if opening_ohlc is None:
+                    df_5m = fetch_and_save_candles(self.symbol, "5m", days_back=2, save_csv=False)
+                    if not df_5m.empty:
+                        df_5m["timestamp"] = pd.to_datetime(df_5m["timestamp"])
+                        today_5m = df_5m[df_5m["timestamp"].dt.date == current_dt.date()].sort_values("timestamp")
+                        if len(today_5m) >= 3:
+                            self.bars_5m = today_5m.iloc[:3].to_dict("records")
+                            opening_ohlc = {
+                                "open": float(self.bars_5m[0]["open"]),
+                                "high": max(float(b["high"]) for b in self.bars_5m[:3]),
+                                "low": min(float(b["low"]) for b in self.bars_5m[:3]),
+                                "close": float(self.bars_5m[2]["close"]),
+                                "source": "Angel 5-minute reconstruction",
+                            }
+                if opening_ohlc is None:
+                    raise RuntimeError("Angel has not published a completed 09:15–09:30 opening candle yet")
             except Exception as e:
-                if runtime_bars:
-                    self.opening_decision_reason = "Verified Angel opening candles were unavailable; setup withheld for data safety."
-                    if self.opening_fetch_attempts >= 3:
-                        self.opening_fetch_final_failure = True
-                        logger.error(
-                            "ORION opening setup withheld after three authoritative "
-                            f"Angel-candle attempts ({e})"
-                        )
-                    else:
-                        self.next_opening_fetch_retry_at = current_dt + timedelta(minutes=5)
-                        logger.warning(
-                            "ORION authoritative opening candles unavailable; retry %s/3 at %s (%s)",
-                            self.opening_fetch_attempts + 1,
-                            self.next_opening_fetch_retry_at.strftime("%H:%M"),
-                            e,
-                        )
-                    return
-                logger.warning(f"Could not fetch today's opening bars via API: {e}")
+                self.opening_data_pending = self.opening_fetch_attempts < 3
+                if self.opening_data_pending:
+                    self.next_opening_fetch_retry_at = current_dt + timedelta(minutes=5)
+                    self.opening_decision_reason = (
+                        "Waiting for Angel's verified opening candle; "
+                        f"retry {self.opening_fetch_attempts + 1}/3 at "
+                        f"{self.next_opening_fetch_retry_at.strftime('%H:%M')} IST."
+                    )
+                    logger.warning("ORION opening candle pending; %s (%s)", self.opening_decision_reason, e)
+                else:
+                    self.opening_fetch_final_failure = True
+                    self.opening_decision_reason = "Verified Angel opening data was unavailable after three attempts; no trade for data safety."
+                    logger.error("ORION opening setup withheld after three authoritative Angel-candle attempts (%s)", e)
+                return
 
-        if len(self.bars_5m) < 3:
-            self.opening_decision_reason = "Fewer than three completed opening candles were available."
-            logger.warning(f"Insufficient bars to construct 15m opening candle (found {len(self.bars_5m)})")
-            return
+        if opening_ohlc is None:
+            if len(self.bars_5m) < 3:
+                self.opening_decision_reason = "Fewer than three completed opening candles were available."
+                logger.warning("Insufficient bars to construct 15m opening candle (found %s)", len(self.bars_5m))
+                return
+            opening_ohlc = {
+                "open": float(self.bars_5m[0]["open"]),
+                "high": max(float(b["high"]) for b in self.bars_5m[:3]),
+                "low": min(float(b["low"]) for b in self.bars_5m[:3]),
+                "close": float(self.bars_5m[2]["close"]),
+                "source": "supplied bars",
+            }
 
-        o15 = self.bars_5m[0]["open"]
-        c15 = self.bars_5m[2]["close"]
-        h15 = max(b["high"] for b in self.bars_5m[:3])
-        l15 = min(b["low"] for b in self.bars_5m[:3])
+        self.opening_data_pending = False
+        self.next_opening_fetch_retry_at = None
+        o15 = opening_ohlc["open"]
+        c15 = opening_ohlc["close"]
+        h15 = opening_ohlc["high"]
+        l15 = opening_ohlc["low"]
         body15 = abs(c15 - o15)
         range15 = h15 - l15
         is_green = c15 >= o15
@@ -241,7 +274,7 @@ class OpeningRetestStrategy(BaseStrategy):
         self.candle_15m = {
             "open": o15, "high": h15, "low": l15, "close": c15,
             "body": body15, "range": range15, "is_green": is_green,
-            "source": "Angel historical" if should_fetch_exchange_bars else "supplied bars",
+            "source": opening_ohlc["source"],
         }
 
         logger.info(

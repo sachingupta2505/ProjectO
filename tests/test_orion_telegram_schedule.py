@@ -11,6 +11,7 @@ def _runner_with_telegram():
     runner = TradingBotRunner.__new__(TradingBotRunner)
     runner.telegram = MagicMock()
     runner._orion_opening_alert_date = None
+    runner._orion_opening_pending_alert_date = None
     runner._orion_decision_alert_date = None
     return runner
 
@@ -43,3 +44,19 @@ def test_orion_telegram_cadence_is_0930_and_1100_only():
     assert "Retest entry zone" in opening_alert
     assert "11:00" in decision_alert
     assert "No trade taken" in decision_alert
+
+
+def test_orion_pending_data_is_not_reported_as_a_final_no_setup():
+    runner = _runner_with_telegram()
+    strategy = SimpleNamespace(
+        setup_valid=False,
+        opening_data_pending=True,
+        opening_decision_reason="Waiting for Angel's verified opening candle; retry 2/3 at 09:35 IST.",
+    )
+
+    runner._send_orion_scheduled_alerts(strategy, datetime(2026, 9, 9, 9, 30))
+
+    message = runner.telegram.send_notification.call_args.args[0]
+    assert "Opening Data Delayed" in message
+    assert "No decision has been made" in message
+    assert runner._orion_opening_alert_date is None

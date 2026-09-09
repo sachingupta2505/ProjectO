@@ -108,7 +108,7 @@ def test_opening_retest_valid_bullish_setup_and_trigger(mock_setup):
     assert strategy.trade_closed_today is True
 
 
-def test_runtime_opening_bars_are_replaced_with_authoritative_candles(mock_setup):
+def test_runtime_opening_bars_are_replaced_with_authoritative_15m_candle(mock_setup):
     """A stale tick-built opening range must not decide the live ORION setup."""
     strategy, _, _ = mock_setup
     d = date(2026, 9, 8)
@@ -117,20 +117,18 @@ def test_runtime_opening_bars_are_replaced_with_authoritative_candles(mock_setup
         {"timestamp": datetime.combine(d, time(9, 20)), "open": 23940.0, "high": 23942.0, "low": 23925.0, "close": 23930.0, "data_source": "Fallback", "is_live": False},
         {"timestamp": datetime.combine(d, time(9, 25)), "open": 23930.0, "high": 23935.0, "low": 23920.0, "close": 23926.8, "data_source": "Fallback", "is_live": False},
     ]
-    authoritative = pd.DataFrame([
-        [datetime.combine(d, time(9, 15)), 23743.1, 23758.95, 23680.65, 23694.15, 0],
-        [datetime.combine(d, time(9, 20)), 23693.6, 23695.4, 23678.9, 23679.5, 0],
-        [datetime.combine(d, time(9, 25)), 23680.6, 23685.05, 23669.2, 23672.5, 0],
+    authoritative_15m = pd.DataFrame([
+        [datetime.combine(d, time(9, 15)), 23743.1, 23758.95, 23669.2, 23672.5, 0],
     ], columns=["timestamp", "open", "high", "low", "close", "volume"])
 
     strategy.bars_5m = stale_bars
-    with patch("scripts.download_candles.fetch_and_save_candles", return_value=authoritative):
+    with patch("scripts.download_candles.fetch_and_save_candles", return_value=authoritative_15m):
         strategy.evaluate_opening_15m_candle(datetime.combine(d, time(9, 30)))
 
     assert strategy.setup_valid is True
     assert strategy.setup_side == "PUT"
     assert strategy.body_15m == pytest.approx(70.6)
-    assert strategy.candle_15m["source"] == "Angel historical"
+    assert strategy.candle_15m["source"] == "Angel 15-minute"
 
 
 def test_runtime_opening_bars_are_not_used_when_authoritative_fetch_fails(mock_setup):
@@ -148,6 +146,39 @@ def test_runtime_opening_bars_are_not_used_when_authoritative_fetch_fails(mock_s
     assert strategy.candle_15m is None
     assert strategy.opening_fetch_attempts == 1
     assert strategy.next_opening_fetch_retry_at == datetime.combine(d, time(9, 35))
+
+
+def test_verified_five_minute_bars_are_used_when_native_15m_is_delayed(mock_setup):
+    strategy, _, _ = mock_setup
+    d = date(2026, 9, 9)
+    delayed_15m = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+    verified_5m = pd.DataFrame([
+        [datetime.combine(d, time(9, 15)), 24000, 24020, 23995, 24015, 0],
+        [datetime.combine(d, time(9, 20)), 24015, 24040, 24010, 24030, 0],
+        [datetime.combine(d, time(9, 25)), 24030, 24055, 24025, 24050, 0],
+    ], columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+    with patch("scripts.download_candles.fetch_and_save_candles", side_effect=[delayed_15m, verified_5m]):
+        strategy.evaluate_opening_15m_candle(datetime.combine(d, time(9, 30)))
+
+    assert strategy.setup_valid is True
+    assert strategy.candle_15m["source"] == "Angel 5-minute reconstruction"
+    assert strategy.candle_15m["close"] == 24050.0
+
+
+def test_cold_start_rate_limit_retries_instead_of_final_no_setup(mock_setup):
+    """A post-restart bot must wait for verified data rather than reject ORION."""
+    strategy, _, _ = mock_setup
+    d = date(2026, 9, 9)
+
+    with patch("scripts.download_candles.fetch_and_save_candles", side_effect=RuntimeError("rate limited")):
+        strategy.evaluate_opening_15m_candle(datetime.combine(d, time(9, 30)))
+
+    assert strategy.setup_valid is False
+    assert strategy.candle_15m is None
+    assert strategy.opening_data_pending is True
+    assert strategy.opening_fetch_final_failure is False
+    assert "Waiting for Angel" in strategy.opening_decision_reason
 
 
 def test_orion_20_uses_balanced_zone_and_confirmation(mock_setup):

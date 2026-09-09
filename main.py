@@ -59,6 +59,7 @@ class TradingBotRunner:
         self._rms_halted = False
         self._market_open_alert_date = None
         self._orion_opening_alert_date = None
+        self._orion_opening_pending_alert_date = None
         self._orion_decision_alert_date = None
         self._bar_session_date = None
         self._last_bar_time = 0.0
@@ -462,6 +463,15 @@ class TradingBotRunner:
         alert_date = timestamp.date()
         alert_time = timestamp.time()
         if alert_time >= dtime(9, 30) and self._orion_opening_alert_date != alert_date:
+            if getattr(orion_strat, "opening_data_pending", False):
+                if getattr(self, "_orion_opening_pending_alert_date", None) != alert_date:
+                    self._orion_opening_pending_alert_date = alert_date
+                    reason = getattr(orion_strat, "opening_decision_reason", "Waiting for verified opening data.")
+                    self.telegram.send_notification(
+                        f"⏳ <b>ORION 2.0 — Opening Data Delayed</b>\n\n"
+                        f"{reason}\n\nNo decision has been made. ORION will resume automatically once verified data arrives."
+                    )
+                return
             self._orion_opening_alert_date = alert_date
             if orion_strat.setup_valid:
                 self.telegram.send_notification(
